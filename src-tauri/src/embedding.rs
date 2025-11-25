@@ -1,6 +1,12 @@
 use crate::chunking::chunk_content;
 use crate::db::Database;
+use crate::extraction::{
+    create_extracted_tags, extract_tags_from_chunk, get_tag_tree_json, link_tags_to_atom,
+    merge_chunk_extractions, validate_tag_ids, ExtractionResult,
+};
 use crate::models::EmbeddingCompletePayload;
+use crate::settings;
+use reqwest::Client;
 use std::sync::Arc;
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -11,9 +17,11 @@ use uuid::Uuid;
 /// 1. Sets embedding_status to 'processing'
 /// 2. Chunks the content
 /// 3. Generates real embeddings for each chunk using sqlite-lembed
-/// 4. Stores chunks and embeddings in database
-/// 5. Sets embedding_status to 'complete' or 'failed'
-/// 6. Emits 'embedding-complete' event
+/// 4. Extracts tags using OpenRouter LLM (if enabled)
+/// 5. Stores chunks and embeddings in database
+/// 6. Links extracted tags to the atom
+/// 7. Sets embedding_status to 'complete' or 'failed'
+/// 8. Emits 'embedding-complete' event with tag info
 pub fn spawn_embedding_task(
     app_handle: AppHandle,
     db: Arc<Database>,
@@ -21,13 +29,18 @@ pub fn spawn_embedding_task(
     content: String,
 ) {
     std::thread::spawn(move || {
-        let result = process_embeddings(&db, &atom_id, &content);
+        // Create a tokio runtime for async operations
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        
+        let result = rt.block_on(process_embeddings(&db, &atom_id, &content));
 
         let payload = match result {
-            Ok(()) => EmbeddingCompletePayload {
+            Ok((tags_extracted, new_tags_created)) => EmbeddingCompletePayload {
                 atom_id: atom_id.clone(),
                 status: "complete".to_string(),
                 error: None,
+                tags_extracted,
+                new_tags_created,
             },
             Err(e) => {
                 // Update status to failed
@@ -41,6 +54,8 @@ pub fn spawn_embedding_task(
                     atom_id: atom_id.clone(),
                     status: "failed".to_string(),
                     error: Some(e),
+                    tags_extracted: Vec::new(),
+                    new_tags_created: Vec::new(),
                 }
             }
         };
@@ -50,7 +65,11 @@ pub fn spawn_embedding_task(
     });
 }
 
-fn process_embeddings(db: &Database, atom_id: &str, content: &str) -> Result<(), String> {
+async fn process_embeddings(
+    db: &Database,
+    atom_id: &str,
+    content: &str,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
 
     // Set status to processing
@@ -59,6 +78,21 @@ fn process_embeddings(db: &Database, atom_id: &str, content: &str) -> Result<(),
         [atom_id],
     )
     .map_err(|e| e.to_string())?;
+
+    // Get settings for auto-tagging
+    let settings_map = settings::get_all_settings(&conn)?;
+    let auto_tagging_enabled = settings_map
+        .get("auto_tagging_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(true); // Default to true
+    let api_key = settings_map.get("openrouter_api_key").cloned();
+
+    // Get tag tree for extraction context (if auto-tagging is enabled)
+    let tag_tree_json = if auto_tagging_enabled && api_key.is_some() {
+        get_tag_tree_json(&conn)?
+    } else {
+        String::new()
+    };
 
     // First, get existing chunk IDs for this atom to delete from vec_chunks
     let existing_chunk_ids: Vec<String> = {
@@ -93,11 +127,23 @@ fn process_embeddings(db: &Database, atom_id: &str, content: &str) -> Result<(),
             [atom_id],
         )
         .map_err(|e| e.to_string())?;
-        return Ok(());
+        return Ok((Vec::new(), Vec::new()));
     }
 
-    // Process each chunk with REAL embeddings using sqlite-lembed
+    // Drop the connection lock before async operations
+    drop(conn);
+
+    // Create HTTP client for OpenRouter API
+    let client = Client::new();
+
+    // Collect extraction results
+    let mut all_extraction_results: Vec<ExtractionResult> = Vec::new();
+
+    // Process each chunk
     for (index, chunk_content) in chunks.iter().enumerate() {
+        // Re-acquire connection for embedding generation
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        
         let chunk_id = Uuid::new_v4().to_string();
 
         // Generate REAL embedding using sqlite-lembed
@@ -122,6 +168,48 @@ fn process_embeddings(db: &Database, atom_id: &str, content: &str) -> Result<(),
             rusqlite::params![&chunk_id, &embedding_blob],
         )
         .map_err(|e| format!("Failed to insert vec_chunk: {}", e))?;
+
+        // Drop connection before async extraction
+        drop(conn);
+
+        // Extract tags (if enabled and API key is set)
+        if auto_tagging_enabled {
+            if let Some(ref key) = api_key {
+                match extract_tags_from_chunk(&client, key, chunk_content, &tag_tree_json).await {
+                    Ok(result) => all_extraction_results.push(result),
+                    Err(e) => {
+                        // Log warning but continue - don't fail the whole process
+                        eprintln!("Tag extraction failed for chunk {}: {}", index, e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Re-acquire connection for final operations
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+
+    // Merge extraction results and apply tags
+    let mut all_tag_ids: Vec<String> = Vec::new();
+    let mut new_tag_ids: Vec<String> = Vec::new();
+
+    if !all_extraction_results.is_empty() {
+        let merged = merge_chunk_extractions(all_extraction_results);
+
+        // Validate existing tag IDs
+        let valid_existing_ids = validate_tag_ids(&conn, &merged.existing_tag_ids);
+
+        // Create new tags
+        new_tag_ids = create_extracted_tags(&conn, merged.new_tags)?;
+
+        // Combine all tag IDs
+        all_tag_ids = valid_existing_ids
+            .into_iter()
+            .chain(new_tag_ids.clone())
+            .collect();
+
+        // Link tags to atom
+        link_tags_to_atom(&conn, atom_id, &all_tag_ids)?;
     }
 
     // Set status to complete
@@ -131,7 +219,7 @@ fn process_embeddings(db: &Database, atom_id: &str, content: &str) -> Result<(),
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(())
+    Ok((all_tag_ids, new_tag_ids))
 }
 
 /// Convert distance to similarity score (0-1 scale)

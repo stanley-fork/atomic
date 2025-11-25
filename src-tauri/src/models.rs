@@ -59,6 +59,8 @@ pub struct EmbeddingCompletePayload {
     pub atom_id: String,
     pub status: String, // "complete" or "failed"
     pub error: Option<String>,
+    pub tags_extracted: Vec<String>,      // IDs of all tags applied
+    pub new_tags_created: Vec<String>,    // IDs of newly created tags
 }
 
 /// Chunk data for internal use

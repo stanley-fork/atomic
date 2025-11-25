@@ -2,6 +2,7 @@ mod chunking;
 mod commands;
 mod db;
 mod embedding;
+mod extraction;
 mod models;
 mod settings;
 
