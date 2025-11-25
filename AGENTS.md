@@ -1,10 +1,19 @@
 # Atomic - Note-Taking Desktop Application
 
 ## Project Overview
-Atomic is a Tauri v2 desktop application for note-taking with a React frontend. It features markdown editing, hierarchical tagging, AI-powered semantic search using local embeddings, and automatic tag extraction using OpenRouter LLM.
+Atomic is a Tauri v2 desktop application for note-taking with a React frontend. It features markdown editing, hierarchical tagging, AI-powered semantic search using local embeddings, automatic tag extraction, and wiki article synthesis using OpenRouter LLM.
 
-## Current Status: Phase 3 Complete
-Phase 3 (Automatic Tag Extraction) is complete with:
+## Current Status: Phase 4 Complete
+Phase 4 (Wiki Synthesis) is complete with:
+- Wiki article generation for tags using OpenRouter LLM
+- Inline citations with [N] notation linking to source atoms
+- Citation popovers showing excerpt text with "View full atom" links
+- Incremental article updates when new atoms are added
+- Article regeneration with confirmation dialog
+- New atoms available banner with update button
+- Wiki viewer in right drawer with empty, generating, and ready states
+
+Phase 3 (Automatic Tag Extraction) features:
 - OpenRouter API integration for LLM-powered tag extraction
 - Settings UI for API key configuration and auto-tagging toggle
 - Automatic tag extraction during the embedding pipeline
@@ -60,6 +69,7 @@ Phase 1 (Foundation + Data Layer) features:
     chunking.rs       # Content chunking algorithm
     embedding.rs      # Embedding generation + tag extraction pipeline
     extraction.rs     # OpenRouter API integration, tag extraction logic
+    wiki.rs           # Wiki article generation and update logic
     settings.rs       # Settings CRUD operations
   /resources
     all-MiniLM-L6-v2.q8_0.gguf  # Bundled embedding model (~24MB, Q8_0 quantization)
@@ -74,10 +84,11 @@ Phase 1 (Foundation + Data Layer) features:
     /layout           # LeftPanel, MainView, RightDrawer, Layout
     /atoms            # AtomCard, AtomEditor, AtomViewer, AtomGrid, AtomList, RelatedAtoms
     /tags             # TagTree, TagNode, TagChip, TagSelector
+    /wiki             # WikiViewer, WikiArticleContent, WikiHeader, WikiEmptyState, WikiGenerating, CitationLink, CitationPopover
     /search           # SemanticSearch
     /settings         # SettingsModal, SettingsButton
     /ui               # Button, Input, Modal, FAB, ContextMenu
-  /stores             # Zustand stores (atoms.ts, tags.ts, ui.ts, settings.ts)
+  /stores             # Zustand stores (atoms.ts, tags.ts, ui.ts, settings.ts, wiki.ts)
   /hooks              # Custom hooks (useClickOutside, useKeyboard, useEmbeddingEvents)
   /lib                # Utilities (tauri.ts, markdown.ts, date.ts)
   App.tsx
@@ -177,6 +188,26 @@ CREATE TABLE settings (
   value TEXT NOT NULL
 );
 
+-- Wiki articles for tags
+CREATE TABLE wiki_articles (
+  id TEXT PRIMARY KEY,
+  tag_id TEXT UNIQUE REFERENCES tags(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  atom_count INTEGER NOT NULL
+);
+
+-- Citations linking article content to source atoms/chunks
+CREATE TABLE wiki_citations (
+  id TEXT PRIMARY KEY,
+  wiki_article_id TEXT REFERENCES wiki_articles(id) ON DELETE CASCADE,
+  citation_index INTEGER NOT NULL,
+  atom_id TEXT REFERENCES atoms(id) ON DELETE CASCADE,
+  chunk_index INTEGER,
+  excerpt TEXT NOT NULL
+);
+
 -- Temporary table for sqlite-lembed model registration (per-connection)
 -- temp.lembed_models(name TEXT, model BLOB)
 ```
@@ -208,6 +239,13 @@ CREATE TABLE settings (
 - `process_pending_embeddings()` → `i32` (processes all pending atoms, returns count)
 - `get_embedding_status(atom_id)` → `String`
 
+### Wiki Operations
+- `get_wiki_article(tag_id)` → `Option<WikiArticleWithCitations>` (returns article with citations if exists)
+- `get_wiki_article_status(tag_id)` → `WikiArticleStatus` (quick check: has_article, atom counts, updated_at)
+- `generate_wiki_article(tag_id, tag_name)` → `WikiArticleWithCitations` (generates new article from scratch)
+- `update_wiki_article(tag_id, tag_name)` → `WikiArticleWithCitations` (incrementally updates with new atoms)
+- `delete_wiki_article(tag_id)` → `()` (deletes article and citations)
+
 ### Settings Operations
 - `get_settings()` → `HashMap<String, String>` (all settings)
 - `set_setting(key, value)` → `()` (upsert a setting)
@@ -231,6 +269,41 @@ Payload:
   new_tags_created: string[];    // IDs of newly created tags
 }
 ```
+
+## Wiki Synthesis
+
+### How It Works
+1. User clicks the article icon next to a tag in the left panel
+2. Right drawer opens in wiki mode for that tag
+3. If no article exists, shows empty state with "Generate Article" button
+4. Generation fetches relevant chunks from atoms with that tag
+5. Chunks are ranked by embedding similarity to tag name
+6. Top chunks are sent to OpenRouter LLM with generation prompt
+7. LLM returns markdown article with [N] citations
+8. Citations are extracted and mapped to source atoms/chunks
+9. Article and citations are saved to database
+
+### Incremental Updates
+When new atoms are added after article generation:
+1. Status check shows "X new atoms available" banner
+2. Clicking "Update Article" fetches only new atoms' chunks
+3. Existing article and new sources are sent to LLM with update prompt
+4. LLM integrates new information, continuing citation numbering
+5. Updated article replaces existing content
+
+### Citation Interaction
+- Citations appear as clickable [N] links inline in text
+- Clicking opens a popover positioned near the citation
+- Popover shows excerpt text (~300 chars max)
+- "View full atom →" link opens atom in viewer mode
+- Popover closes on click outside or Escape key
+
+### Structured Outputs
+Wiki generation uses OpenRouter's structured outputs:
+- `response_format.type`: `"json_schema"` with strict validation
+- Schema: `article_content` (string) and `citations_used` (array of integers)
+- Temperature: 0.3 for consistent output
+- Max tokens: 4000 for longer articles
 
 ## Automatic Tag Extraction
 
@@ -286,6 +359,7 @@ Content is chunked for optimal embedding generation:
 - `zerocopy` = { version = "0.8", features = ["derive"] }
 - `tokio` = { version = "1", features = ["full"] }
 - `reqwest` = { version = "0.12", features = ["json"] }
+- `regex` = "1"
 
 ### Frontend (package.json)
 - `@tauri-apps/api` = "^2.0.0"
@@ -339,16 +413,25 @@ Content is chunked for optimal embedding generation:
 
 ### ui.ts
 - `selectedTagId: string | null` - Currently selected tag filter
-- `drawerState: { isOpen, mode, atomId }` - Drawer state
+- `drawerState: { isOpen, mode, atomId, tagId, tagName }` - Drawer state
 - `viewMode: 'grid' | 'list'` - Atom display mode
 - `searchQuery: string` - Text search filter
-- Actions: `setSelectedTag`, `openDrawer`, `closeDrawer`, `setViewMode`, `setSearchQuery`
+- Actions: `setSelectedTag`, `openDrawer`, `openWikiDrawer`, `closeDrawer`, `setViewMode`, `setSearchQuery`
 
 ### settings.ts
 - `settings: Record<string, string>` - All settings as key-value pairs
 - `isLoading: boolean`
 - `error: string | null`
 - Actions: `fetchSettings`, `setSetting`, `testOpenRouterConnection`
+
+### wiki.ts
+- `currentArticle: WikiArticleWithCitations | null` - Current wiki article
+- `articleStatus: WikiArticleStatus | null` - Article status info
+- `isLoading: boolean` - Loading state
+- `isGenerating: boolean` - Generation in progress
+- `isUpdating: boolean` - Update in progress
+- `error: string | null` - Error message
+- Actions: `fetchArticle`, `fetchArticleStatus`, `generateArticle`, `updateArticle`, `deleteArticle`, `clearArticle`, `clearError`
 
 ## sqlite-lembed Integration
 
@@ -376,12 +459,5 @@ The `get_lembed_extension_filename()` function in `db.rs` automatically selects 
 ### Similarity Calculation
 - sqlite-vec returns Euclidean distance (lower = more similar)
 - For normalized vectors, convert to similarity: `1.0 - (distance / 2.0)`
-- Default threshold: 0.7 for related atoms, 0.3 for semantic search
-
-## Future Phases
-
-### Phase 4: Wiki Integration
-- Wikipedia article fetching and display
-- Wiki viewer in right drawer
-- Link atoms to Wikipedia articles
+- Default threshold: 0.7 for related atoms, 0.3 for semantic search, 0.3 for wiki chunk selection
 
