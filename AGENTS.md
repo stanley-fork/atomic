@@ -43,7 +43,7 @@ Phase 1 (Foundation + Data Layer) features:
 - **State Management**: Zustand 5
 - **Database**: SQLite with sqlite-vec and sqlite-lembed extensions (via rusqlite)
 - **Embeddings**: Real 384-dimensional vectors via sqlite-lembed + all-MiniLM-L6-v2 GGUF model
-- **LLM Provider**: OpenRouter API (anthropic/claude-haiku-4.5)
+- **LLM Provider**: OpenRouter API (anthropic/claude-sonnet-4.5 with structured outputs)
 - **HTTP Client**: reqwest (Rust)
 - **Markdown Editor**: CodeMirror 6 (`@uiw/react-codemirror`)
 - **Markdown Rendering**: react-markdown with remark-gfm
@@ -237,11 +237,17 @@ Payload:
 ### How It Works
 1. When an atom is created/updated, the embedding pipeline runs
 2. If auto-tagging is enabled and API key is set, tag extraction runs in parallel with embedding
-3. Each content chunk is sent to OpenRouter (Claude Haiku 4.5) with the existing tag hierarchy
+3. Each content chunk is sent to OpenRouter (Claude Sonnet 4.5) with the existing tag hierarchy
 4. The LLM identifies existing tags that apply and suggests new tags if needed
 5. Results from all chunks are merged and deduplicated
 6. Existing tags are linked to the atom; new tags are created with proper hierarchy
 7. The `embedding-complete` event includes tag information for UI updates
+
+### Structured Outputs
+The tag extraction uses OpenRouter's structured outputs feature to guarantee valid JSON responses:
+- `response_format.type`: `"json_schema"` with strict schema validation
+- `provider.require_parameters`: `true` to ensure the provider supports structured outputs
+- Schema enforces the exact structure: `existing_tag_ids` (array of strings) and `new_tags` (array of objects with name, parent_id, suggested_category)
 
 ### Tag Categories
 New tags are automatically placed under category tags:
