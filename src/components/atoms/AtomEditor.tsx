@@ -8,6 +8,7 @@ import { Input } from '../ui/Input';
 import { TagSelector } from '../tags/TagSelector';
 import { useAtomsStore, AtomWithTags, Tag } from '../../stores/atoms';
 import { useTagsStore } from '../../stores/tags';
+import { useSettingsStore } from '../../stores/settings';
 import { isValidUrl } from '../../lib/markdown';
 
 interface AtomEditorProps {
@@ -19,6 +20,7 @@ interface AtomEditorProps {
 export function AtomEditor({ atomId, onClose, onSaved }: AtomEditorProps) {
   const { atoms, createAtom, updateAtom } = useAtomsStore();
   const { fetchTags } = useTagsStore();
+  const { settings, fetchSettings } = useSettingsStore();
 
   const [content, setContent] = useState('');
   const [sourceUrl, setSourceUrl] = useState('');
@@ -28,6 +30,11 @@ export function AtomEditor({ atomId, onClose, onSaved }: AtomEditorProps) {
 
   const isEditing = atomId !== null;
   const existingAtom = isEditing ? atoms.find((a) => a.id === atomId) : null;
+  const autoTaggingEnabled = settings.auto_tagging_enabled !== 'false' && !!settings.openrouter_api_key;
+
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
 
   useEffect(() => {
     if (existingAtom) {
@@ -137,6 +144,16 @@ export function AtomEditor({ atomId, onClose, onSaved }: AtomEditorProps) {
           error={urlError || undefined}
         />
         <TagSelector selectedTags={selectedTags} onTagsChange={setSelectedTags} />
+        {autoTaggingEnabled && (
+          <p className="text-xs text-[#888888] mt-1">
+            <span className="inline-flex items-center gap-1">
+              <svg className="w-3 h-3 text-[#7c3aed]" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+              </svg>
+              Tags will be extracted automatically
+            </span>
+          </p>
+        )}
       </div>
 
       {/* Footer */}
