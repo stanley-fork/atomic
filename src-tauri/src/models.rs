@@ -120,3 +120,19 @@ pub struct ChunkWithContext {
     pub similarity_score: f32,
 }
 
+/// Position of an atom on the canvas
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtomPosition {
+    pub atom_id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Atom with its average embedding vector for similarity calculations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtomWithEmbedding {
+    #[serde(flatten)]
+    pub atom: AtomWithTags,
+    pub embedding: Option<Vec<f32>>,  // Average of chunk embeddings, None if not yet embedded
+}
+

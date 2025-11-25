@@ -1,6 +1,6 @@
 use crate::db::{Database, SharedDatabase};
 use crate::embedding::{distance_to_similarity, spawn_embedding_task};
-use crate::models::{Atom, AtomWithTags, SemanticSearchResult, SimilarAtomResult, Tag, TagWithCount};
+use crate::models::{Atom, AtomPosition, AtomWithEmbedding, AtomWithTags, SemanticSearchResult, SimilarAtomResult, Tag, TagWithCount};
 use crate::settings;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -896,5 +896,140 @@ pub fn delete_wiki_article(
 ) -> Result<(), String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     wiki::delete_article(&conn, &tag_id)
+}
+
+// Canvas commands
+
+/// Get all stored atom positions from the database
+#[tauri::command]
+pub fn get_atom_positions(db: State<Database>) -> Result<Vec<AtomPosition>, String> {
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn
+        .prepare("SELECT atom_id, x, y FROM atom_positions")
+        .map_err(|e| e.to_string())?;
+    
+    let positions = stmt
+        .query_map([], |row| {
+            Ok(AtomPosition {
+                atom_id: row.get(0)?,
+                x: row.get(1)?,
+                y: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    
+    Ok(positions)
+}
+
+/// Bulk save/update positions after simulation completes
+#[tauri::command]
+pub fn save_atom_positions(
+    db: State<Database>,
+    positions: Vec<AtomPosition>,
+) -> Result<(), String> {
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let now = Utc::now().to_rfc3339();
+    
+    for pos in positions {
+        conn.execute(
+            "INSERT OR REPLACE INTO atom_positions (atom_id, x, y, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            (&pos.atom_id, &pos.x, &pos.y, &now),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
+
+/// Get atoms with their average embedding vector for similarity calculations
+#[tauri::command]
+pub fn get_atoms_with_embeddings(db: State<Database>) -> Result<Vec<AtomWithEmbedding>, String> {
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    
+    // First get all atoms with tags
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, content, source_url, created_at, updated_at, COALESCE(embedding_status, 'pending') FROM atoms ORDER BY updated_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    
+    let atoms: Vec<Atom> = stmt
+        .query_map([], |row| {
+            Ok(Atom {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                source_url: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+                embedding_status: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    
+    let mut result = Vec::new();
+    for atom in atoms {
+        let tags = get_tags_for_atom(&conn, &atom.id)?;
+        
+        // Get average embedding for this atom
+        let embedding = get_average_embedding(&conn, &atom.id)?;
+        
+        result.push(AtomWithEmbedding {
+            atom: AtomWithTags { atom, tags },
+            embedding,
+        });
+    }
+    
+    Ok(result)
+}
+
+/// Helper function to calculate average embedding from all chunks of an atom
+fn get_average_embedding(conn: &rusqlite::Connection, atom_id: &str) -> Result<Option<Vec<f32>>, String> {
+    let mut stmt = conn
+        .prepare("SELECT embedding FROM atom_chunks WHERE atom_id = ?1 AND embedding IS NOT NULL")
+        .map_err(|e| e.to_string())?;
+    
+    let embeddings: Vec<Vec<u8>> = stmt
+        .query_map([atom_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    
+    if embeddings.is_empty() {
+        return Ok(None);
+    }
+    
+    // Convert blob embeddings to f32 vectors and average them
+    // Each embedding is 384 dimensions * 4 bytes = 1536 bytes
+    let dimension = 384;
+    let mut avg_embedding = vec![0.0f32; dimension];
+    let count = embeddings.len() as f32;
+    
+    for blob in &embeddings {
+        if blob.len() != dimension * 4 {
+            continue; // Skip malformed embeddings
+        }
+        
+        for i in 0..dimension {
+            let bytes: [u8; 4] = [
+                blob[i * 4],
+                blob[i * 4 + 1],
+                blob[i * 4 + 2],
+                blob[i * 4 + 3],
+            ];
+            avg_embedding[i] += f32::from_le_bytes(bytes);
+        }
+    }
+    
+    // Divide by count to get average
+    for val in &mut avg_embedding {
+        *val /= count;
+    }
+    
+    Ok(Some(avg_embedding))
 }
 

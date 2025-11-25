@@ -214,6 +214,16 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_wiki_articles_tag ON wiki_articles(tag_id);
             CREATE INDEX IF NOT EXISTS idx_wiki_citations_article ON wiki_citations(wiki_article_id);
             CREATE INDEX IF NOT EXISTS idx_wiki_citations_atom ON wiki_citations(atom_id);
+
+            -- Atom positions for canvas view
+            CREATE TABLE IF NOT EXISTS atom_positions (
+              atom_id TEXT PRIMARY KEY REFERENCES atoms(id) ON DELETE CASCADE,
+              x REAL NOT NULL,
+              y REAL NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_atom_positions_atom ON atom_positions(atom_id);
             "#,
         )
         .map_err(|e| format!("Failed to run migrations: {}", e))?;

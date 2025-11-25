@@ -71,6 +71,9 @@ pub fn run() {
             commands::generate_wiki_article,
             commands::update_wiki_article,
             commands::delete_wiki_article,
+            commands::get_atom_positions,
+            commands::save_atom_positions,
+            commands::get_atoms_with_embeddings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
