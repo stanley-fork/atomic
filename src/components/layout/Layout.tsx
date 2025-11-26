@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { LeftPanel } from './LeftPanel';
 import { MainView } from './MainView';
 import { RightDrawer } from './RightDrawer';
+import { LoadingIndicator } from '../ui/LoadingIndicator';
 import { useAtomsStore } from '../../stores/atoms';
 import { useTagsStore } from '../../stores/tags';
 import { processPendingEmbeddings } from '../../lib/tauri';
@@ -44,6 +45,7 @@ export function Layout() {
       <LeftPanel />
       <MainView />
       <RightDrawer />
+      <LoadingIndicator />
     </div>
   );
 }

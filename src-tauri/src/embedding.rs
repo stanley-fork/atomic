@@ -1,8 +1,9 @@
 use crate::chunking::chunk_content;
 use crate::db::Database;
 use crate::extraction::{
-    create_extracted_tags, extract_tags_from_chunk, get_tag_tree_json, link_tags_to_atom,
-    merge_chunk_extractions, validate_tag_ids, ExtractionResult,
+    build_tag_info_for_consolidation, cleanup_orphaned_parents, consolidate_atom_tags,
+    extract_tags_from_chunk, get_or_create_tag, get_tag_tree_for_llm, link_tags_to_atom,
+    tag_names_to_ids,
 };
 use crate::models::EmbeddingCompletePayload;
 use crate::settings;
@@ -15,7 +16,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 // Limit concurrent embedding tasks to prevent thread exhaustion
-const MAX_CONCURRENT_EMBEDDINGS: usize = 15;
+const MAX_CONCURRENT_EMBEDDINGS: usize = 1;
 
 static EMBEDDING_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| {
     Semaphore::new(MAX_CONCURRENT_EMBEDDINGS)
@@ -201,7 +202,7 @@ async fn process_embeddings(
     content: &str,
 ) -> Result<(Vec<String>, Vec<String>), String> {
     // Scope to ensure connection is dropped before any async operations
-    let (auto_tagging_enabled, api_key, tagging_model, tag_tree_json, chunks) = {
+    let (auto_tagging_enabled, api_key, tagging_model, chunks) = {
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
 
         // Set status to processing
@@ -225,13 +226,6 @@ async fn process_embeddings(
             .get("tagging_model")
             .cloned()
             .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
-
-        // Get tag tree for extraction context (if auto-tagging is enabled)
-        let tag_tree_json = if auto_tagging_enabled {
-            get_tag_tree_json(&conn)?
-        } else {
-            String::new()
-        };
 
         // First, get existing chunk IDs for this atom to delete from vec_chunks
         let existing_chunk_ids: Vec<String> = {
@@ -269,14 +263,15 @@ async fn process_embeddings(
             return Ok((Vec::new(), Vec::new()));
         }
 
-        (auto_tagging_enabled, api_key, tagging_model, tag_tree_json, chunks)
+        (auto_tagging_enabled, api_key, tagging_model, chunks)
     }; // Connection dropped here
 
     // Create HTTP client for OpenRouter API
     let client = Client::new();
 
-    // Collect extraction results
-    let mut all_extraction_results: Vec<ExtractionResult> = Vec::new();
+    // Track all tag IDs and new tag IDs across all chunks
+    let mut all_tag_ids: Vec<String> = Vec::new();
+    let mut all_new_tag_ids: Vec<String> = Vec::new();
 
     // Generate all embeddings via OpenRouter in one batch
     let chunk_texts: Vec<String> = chunks.iter().map(|s| s.to_string()).collect();
@@ -284,8 +279,17 @@ async fn process_embeddings(
         .await
         .map_err(|e| format!("Failed to generate embeddings: {}", e))?;
 
-    // Process each chunk with its embedding
+    // Process each chunk with its embedding SEQUENTIALLY
+    // Each chunk sees the tags extracted from previous chunks
     for (index, chunk_content) in chunks.iter().enumerate() {
+        // Get fresh tag tree that includes tags from previous chunks
+        let tag_tree_json = if auto_tagging_enabled {
+            let conn = db.conn.lock().map_err(|e| e.to_string())?;
+            get_tag_tree_for_llm(&conn)?
+        } else {
+            String::new()
+        };
+
         // Database operations in scope to ensure lock is dropped before async operations
         {
             let conn = db.conn.lock().map_err(|e| e.to_string())?;
@@ -294,15 +298,6 @@ async fn process_embeddings(
 
             // Convert OpenRouter embedding (f32 vec) to binary blob
             let embedding_blob = f32_vec_to_blob_public(&embeddings[index]);
-
-            // OLD LOCAL EMBEDDING CODE (commented out - now using OpenRouter)
-            // let embedding_blob: Vec<u8> = conn
-            //     .query_row(
-            //         "SELECT lembed('all-MiniLM-L6-v2', ?1)",
-            //         [chunk_content],
-            //         |row| row.get(0),
-            //     )
-            //     .map_err(|e| format!("Failed to generate embedding: {}", e))?;
 
             // Insert into atom_chunks
             conn.execute(
@@ -319,10 +314,39 @@ async fn process_embeddings(
             .map_err(|e| format!("Failed to insert vec_chunk: {}", e))?;
         } // Connection dropped here
 
-        // Extract tags (if enabled)
+        // Extract tags with current tag tree (includes tags from previous chunks)
         if auto_tagging_enabled {
             match extract_tags_from_chunk(&client, &api_key, chunk_content, &tag_tree_json, &tagging_model).await {
-                Ok(result) => all_extraction_results.push(result),
+                Ok(result) => {
+                    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+
+                    // Process each tag: find or create
+                    let mut chunk_tag_ids = Vec::new();
+
+                    for tag_application in result.tags {
+                        // Skip invalid tag names
+                        let trimmed_name = tag_application.name.trim();
+                        if trimmed_name.is_empty() || trimmed_name.eq_ignore_ascii_case("null") {
+                            eprintln!("Skipping invalid tag name: '{}'", tag_application.name);
+                            continue;
+                        }
+
+                        // Look up tag by name (case-insensitive), create if doesn't exist
+                        match get_or_create_tag(&conn, &tag_application.name, &tag_application.parent_name) {
+                            Ok(tag_id) => chunk_tag_ids.push(tag_id),
+                            Err(e) => eprintln!("Failed to get/create tag '{}': {}", tag_application.name, e),
+                        }
+                    }
+
+                    // Link all tags to atom
+                    if !chunk_tag_ids.is_empty() {
+                        link_tags_to_atom(&conn, atom_id, &chunk_tag_ids)?;
+                    }
+
+                    // Track for event payload
+                    all_tag_ids.extend(chunk_tag_ids.clone());
+                    all_new_tag_ids.extend(chunk_tag_ids);
+                },
                 Err(e) => {
                     // Log warning but continue - don't fail the whole process
                     eprintln!("Tag extraction failed for chunk {}: {}", index, e);
@@ -331,31 +355,110 @@ async fn process_embeddings(
         }
     }
 
+    // CONSOLIDATION PASS (only for multi-chunk atoms)
+    if chunks.len() > 1 && auto_tagging_enabled && !all_tag_ids.is_empty() {
+        // Deduplicate tag IDs before consolidation
+        all_tag_ids.sort();
+        all_tag_ids.dedup();
+
+        // Build tag info string (sync operation with lock)
+        let tag_info = {
+            let conn = db.conn.lock().map_err(|e| e.to_string())?;
+            build_tag_info_for_consolidation(&conn, &all_tag_ids)?
+        }; // Lock dropped here
+
+        // Call consolidation (async operation without lock)
+        match consolidate_atom_tags(&client, &api_key, tag_info, &tagging_model).await {
+            Ok(consolidation) => {
+                // Re-acquire connection for consolidation operations
+                let conn = db.conn.lock().map_err(|e| e.to_string())?;
+
+                // TRANSLATION LAYER: Names → IDs
+                let lookup_result = tag_names_to_ids(&conn, &consolidation.tags_to_remove)?;
+                if !lookup_result.missing_names.is_empty() {
+                    eprintln!("Warning: Consolidation recommended removing non-existent tags: {:?}",
+                        lookup_result.missing_names);
+                }
+                let remove_ids = lookup_result.found_ids;
+
+                // Remove tags from atom
+                for tag_id in &remove_ids {
+                    conn.execute(
+                        "DELETE FROM atom_tags WHERE atom_id = ?1 AND tag_id = ?2",
+                        rusqlite::params![atom_id, tag_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+
+                    // Check if tag is used elsewhere
+                    let usage_count: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM atom_tags WHERE tag_id = ?1",
+                            [tag_id],
+                            |row| row.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+
+                    // Delete tag entirely if unused
+                    if usage_count == 0 {
+                        // Check if tag has a wiki article
+                        let has_wiki: bool = conn
+                            .query_row(
+                                "SELECT 1 FROM wiki_articles WHERE tag_id = ?1",
+                                [tag_id],
+                                |_| Ok(true),
+                            )
+                            .unwrap_or(false);
+
+                        if has_wiki {
+                            eprintln!("Skipping deletion of tag {} - has associated wiki article", tag_id);
+                        } else {
+                            conn.execute("DELETE FROM tags WHERE id = ?1", [tag_id])
+                                .map_err(|e| e.to_string())?;
+
+                            // Clean up orphaned parents
+                            cleanup_orphaned_parents(&conn, tag_id)?;
+                        }
+                    }
+                }
+
+                // Create new broader tags
+                let mut new_tag_ids = Vec::new();
+                for tag_application in consolidation.tags_to_add {
+                    // Skip invalid tag names
+                    let trimmed_name = tag_application.name.trim();
+                    if trimmed_name.is_empty() || trimmed_name.eq_ignore_ascii_case("null") {
+                        eprintln!("Skipping invalid consolidation tag name: '{}'", tag_application.name);
+                        continue;
+                    }
+
+                    match get_or_create_tag(&conn, &tag_application.name, &tag_application.parent_name) {
+                        Ok(tag_id) => new_tag_ids.push(tag_id),
+                        Err(e) => eprintln!("Failed to get/create consolidation tag '{}': {}", tag_application.name, e),
+                    }
+                }
+
+                // Link new tags to atom
+                if !new_tag_ids.is_empty() {
+                    link_tags_to_atom(&conn, atom_id, &new_tag_ids)?;
+                }
+
+                // Update tracking for event payload
+                all_tag_ids.retain(|id| !remove_ids.contains(id));
+                all_tag_ids.extend(new_tag_ids.clone());
+                all_new_tag_ids.extend(new_tag_ids.clone());
+
+                eprintln!("Tag consolidation complete for atom {}: removed {}, added {}",
+                    atom_id, remove_ids.len(), new_tag_ids.len());
+            }
+            Err(e) => {
+                eprintln!("Tag consolidation failed for atom {}: {}", atom_id, e);
+                // Don't fail the whole process - consolidation is optional
+            }
+        }
+    }
+
     // Re-acquire connection for final operations
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
-
-    // Merge extraction results and apply tags
-    let mut all_tag_ids: Vec<String> = Vec::new();
-    let mut new_tag_ids: Vec<String> = Vec::new();
-
-    if !all_extraction_results.is_empty() {
-        let merged = merge_chunk_extractions(all_extraction_results);
-
-        // Validate existing tag IDs
-        let valid_existing_ids = validate_tag_ids(&conn, &merged.existing_tag_ids);
-
-        // Create new tags
-        new_tag_ids = create_extracted_tags(&conn, merged.new_tags)?;
-
-        // Combine all tag IDs
-        all_tag_ids = valid_existing_ids
-            .into_iter()
-            .chain(new_tag_ids.clone())
-            .collect();
-
-        // Link tags to atom
-        link_tags_to_atom(&conn, atom_id, &all_tag_ids)?;
-    }
 
     // Set status to complete
     conn.execute(
@@ -364,7 +467,13 @@ async fn process_embeddings(
     )
     .map_err(|e| e.to_string())?;
 
-    Ok((all_tag_ids, new_tag_ids))
+    // Deduplicate tag IDs for the event payload
+    all_tag_ids.sort();
+    all_tag_ids.dedup();
+    all_new_tag_ids.sort();
+    all_new_tag_ids.dedup();
+
+    Ok((all_tag_ids, all_new_tag_ids))
 }
 
 /// Convert distance to similarity score (0-1 scale)

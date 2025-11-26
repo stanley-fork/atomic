@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { TagTree } from '../tags/TagTree';
+import { TagSearch } from '../tags/TagSearch';
 import { SettingsButton, SettingsModal } from '../settings';
 
 export function LeftPanel() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  
+
   return (
     <aside className="w-[250px] h-full bg-[#252525] border-r border-[#3d3d3d] flex flex-col">
       {/* Header */}
@@ -17,12 +18,15 @@ export function LeftPanel() {
         </h1>
         <SettingsButton onClick={() => setIsSettingsOpen(true)} />
       </div>
-      
+
+      {/* Tag Search */}
+      <TagSearch />
+
       {/* Tag Tree */}
       <div className="flex-1 overflow-hidden">
         <TagTree />
       </div>
-      
+
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
     </aside>
   );

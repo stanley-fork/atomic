@@ -1,7 +1,7 @@
 use crate::models::{ChunkWithContext, WikiArticle, WikiArticleWithCitations, WikiCitation};
 use chrono::Utc;
 use reqwest::Client;
-use rusqlite::Connection;
+use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use regex::Regex;
@@ -336,13 +336,40 @@ fn get_relevant_chunks_for_article_sync(
     similarity_threshold: f32,
 ) -> Result<Vec<ChunkWithContext>, String> {
 
-    // 2. Get all atom IDs with this tag
+    // 2. Get all descendant tag IDs (including the tag itself)
+    let mut all_tag_ids = vec![tag_id.to_string()];
+    let mut to_process = vec![tag_id.to_string()];
+
+    while let Some(current_id) = to_process.pop() {
+        let mut child_stmt = conn
+            .prepare("SELECT id FROM tags WHERE parent_id = ?1")
+            .map_err(|e| format!("Failed to prepare child query: {}", e))?;
+
+        let children: Vec<String> = child_stmt
+            .query_map([&current_id], |row| row.get(0))
+            .map_err(|e| format!("Failed to query children: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect children: {}", e))?;
+
+        for child_id in children {
+            all_tag_ids.push(child_id.clone());
+            to_process.push(child_id);
+        }
+    }
+
+    // 3. Get all atom IDs with any of these tags (deduplicated)
+    let tag_placeholders = all_tag_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let atom_query = format!(
+        "SELECT DISTINCT atom_id FROM atom_tags WHERE tag_id IN ({})",
+        tag_placeholders
+    );
+
     let mut atom_stmt = conn
-        .prepare("SELECT atom_id FROM atom_tags WHERE tag_id = ?1")
+        .prepare(&atom_query)
         .map_err(|e| format!("Failed to prepare atom query: {}", e))?;
-    
+
     let atom_ids: Vec<String> = atom_stmt
-        .query_map([tag_id], |row| row.get(0))
+        .query_map(rusqlite::params_from_iter(all_tag_ids.iter()), |row| row.get(0))
         .map_err(|e| format!("Failed to query atoms: {}", e))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to collect atom IDs: {}", e))?;
@@ -475,13 +502,35 @@ pub async fn generate_wiki_article(
     // Call OpenRouter API
     let result = call_openrouter_for_wiki(client, api_key, WIKI_GENERATION_SYSTEM_PROMPT, &user_content).await?;
 
-    // Get current atom count for this tag
+    // Get current atom count for this tag (including child tags)
+    // Get all descendant tag IDs (including the tag itself)
+    let mut all_tag_ids = vec![tag_id.to_string()];
+    let mut to_process = vec![tag_id.to_string()];
+
+    while let Some(current_id) = to_process.pop() {
+        let children: Vec<String> = conn
+            .prepare("SELECT id FROM tags WHERE parent_id = ?1")
+            .and_then(|mut stmt| {
+                stmt.query_map([&current_id], |row| row.get(0))?
+                    .collect::<Result<Vec<String>, _>>()
+            })
+            .map_err(|e| format!("Failed to get child tags: {}", e))?;
+
+        for child_id in children {
+            all_tag_ids.push(child_id.clone());
+            to_process.push(child_id);
+        }
+    }
+
+    // Count distinct atoms across this tag and all descendants
+    let tag_placeholders = all_tag_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let count_query = format!(
+        "SELECT COUNT(DISTINCT atom_id) FROM atom_tags WHERE tag_id IN ({})",
+        tag_placeholders
+    );
+
     let atom_count: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM atom_tags WHERE tag_id = ?1",
-            [tag_id],
-            |row| row.get(0),
-        )
+        .query_row(&count_query, params_from_iter(all_tag_ids.iter()), |row| row.get(0))
         .map_err(|e| format!("Failed to count atoms: {}", e))?;
 
     // Create article
@@ -880,13 +929,35 @@ pub fn load_wiki_article(conn: &Connection, tag_id: &str) -> Result<Option<WikiA
 
 /// Get the status of a wiki article for a tag
 pub fn get_article_status(conn: &Connection, tag_id: &str) -> Result<crate::models::WikiArticleStatus, String> {
-    // Get current atom count for this tag
+    // Get current atom count for this tag (including child tags)
+    // Get all descendant tag IDs (including the tag itself)
+    let mut all_tag_ids = vec![tag_id.to_string()];
+    let mut to_process = vec![tag_id.to_string()];
+
+    while let Some(current_id) = to_process.pop() {
+        let children: Vec<String> = conn
+            .prepare("SELECT id FROM tags WHERE parent_id = ?1")
+            .and_then(|mut stmt| {
+                stmt.query_map([&current_id], |row| row.get(0))?
+                    .collect::<Result<Vec<String>, _>>()
+            })
+            .map_err(|e| format!("Failed to get child tags: {}", e))?;
+
+        for child_id in children {
+            all_tag_ids.push(child_id.clone());
+            to_process.push(child_id);
+        }
+    }
+
+    // Count distinct atoms across this tag and all descendants
+    let tag_placeholders = all_tag_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let count_query = format!(
+        "SELECT COUNT(DISTINCT atom_id) FROM atom_tags WHERE tag_id IN ({})",
+        tag_placeholders
+    );
+
     let current_atom_count: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM atom_tags WHERE tag_id = ?1",
-            [tag_id],
-            |row| row.get(0),
-        )
+        .query_row(&count_query, params_from_iter(all_tag_ids.iter()), |row| row.get(0))
         .map_err(|e| format!("Failed to count atoms: {}", e))?;
 
     // Get article info if exists

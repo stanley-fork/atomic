@@ -12,17 +12,26 @@ interface DrawerState {
   tagName: string | null;     // For wiki mode (display purposes)
 }
 
+export interface LoadingOperation {
+  id: string;
+  message: string;
+  timestamp: number;
+}
+
 interface UIStore {
   selectedTagId: string | null;
   drawerState: DrawerState;
   viewMode: ViewMode;
   searchQuery: string;
+  loadingOperations: LoadingOperation[];
   setSelectedTag: (tagId: string | null) => void;
   openDrawer: (mode: DrawerMode, atomId?: string) => void;
   openWikiDrawer: (tagId: string, tagName: string) => void;
   closeDrawer: () => void;
   setViewMode: (mode: ViewMode) => void;
   setSearchQuery: (query: string) => void;
+  addLoadingOperation: (id: string, message: string) => void;
+  removeLoadingOperation: (id: string) => void;
 }
 
 export const useUIStore = create<UIStore>()(
@@ -38,6 +47,7 @@ export const useUIStore = create<UIStore>()(
       },
       viewMode: 'canvas',  // Default to canvas view
       searchQuery: '',
+      loadingOperations: [],
 
       setSelectedTag: (tagId: string | null) => set({ selectedTagId: tagId }),
 
@@ -74,6 +84,19 @@ export const useUIStore = create<UIStore>()(
       setViewMode: (mode: ViewMode) => set({ viewMode: mode }),
 
       setSearchQuery: (query: string) => set({ searchQuery: query }),
+
+      addLoadingOperation: (id: string, message: string) =>
+        set((state) => ({
+          loadingOperations: [
+            ...state.loadingOperations,
+            { id, message, timestamp: Date.now() },
+          ],
+        })),
+
+      removeLoadingOperation: (id: string) =>
+        set((state) => ({
+          loadingOperations: state.loadingOperations.filter((op) => op.id !== id),
+        })),
     }),
     {
       name: 'atomic-ui-storage',

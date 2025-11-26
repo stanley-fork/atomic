@@ -106,7 +106,7 @@ export function RightDrawer() {
       {/* Drawer */}
       <div
         ref={drawerRef}
-        className={`fixed top-0 right-0 h-full w-[50vw] min-w-[400px] max-w-[800px] bg-[#252525] border-l border-[#3d3d3d] shadow-2xl z-50 transition-transform duration-200 ease-out ${
+        className={`fixed top-0 right-0 h-full w-[75vw] min-w-[600px] max-w-[1200px] bg-[#252525] border-l border-[#3d3d3d] shadow-2xl z-50 transition-transform duration-200 ease-out ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
