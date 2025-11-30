@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 pub struct Database {
     pub conn: Mutex<Connection>,
     pub db_path: PathBuf,
-    pub resource_dir: PathBuf,
+    pub resource_dir: PathBuf, // Kept for potential future use
 }
 
 /// Thread-safe wrapper around Database using Arc
@@ -29,14 +29,8 @@ impl Database {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open database: {}", e))?;
 
-        // Enable extension loading and load sqlite-lembed
-        Self::load_lembed_extension(&conn, &resource_dir)?;
-
         // Run migrations
         Self::run_migrations(&conn)?;
-
-        // Register the embedding model
-        Self::register_embedding_model(&conn, &resource_dir)?;
 
         Ok(Database {
             conn: Mutex::new(conn),
@@ -45,99 +39,11 @@ impl Database {
         })
     }
 
-    /// Load the sqlite-lembed extension into a connection
-    fn load_lembed_extension(conn: &Connection, resource_dir: &PathBuf) -> Result<(), String> {
-        // Enable extension loading and load sqlite-lembed extension
-        // Both operations are unsafe as they involve loading external code
-        unsafe {
-            conn.load_extension_enable()
-                .map_err(|e| format!("Failed to enable extension loading: {}", e))?;
-
-            // Determine the extension filename based on OS and architecture
-            let extension_filename = Self::get_lembed_extension_filename();
-            let lembed_path = resource_dir.join(&extension_filename);
-
-            // For load_extension, we need to strip the extension as SQLite adds it automatically
-            // But since we have architecture-specific names, we'll use the full path
-            // and strip just the platform extension (.so, .dylib, .dll)
-            let lembed_path_str = lembed_path.to_str()
-                .ok_or("Invalid lembed path")?;
-
-            // Strip the extension (.so, .dylib, .dll) from the path
-            let lembed_path_without_ext = if lembed_path_str.ends_with(".so") {
-                &lembed_path_str[..lembed_path_str.len() - 3]
-            } else if lembed_path_str.ends_with(".dylib") {
-                &lembed_path_str[..lembed_path_str.len() - 6]
-            } else if lembed_path_str.ends_with(".dll") {
-                &lembed_path_str[..lembed_path_str.len() - 4]
-            } else {
-                lembed_path_str
-            };
-
-            // Specify the entry point explicitly since we use architecture-specific filenames
-            conn.load_extension(lembed_path_without_ext, Some("sqlite3_lembed_init"))
-                .map_err(|e| format!("Failed to load sqlite-lembed extension from {}: {}", lembed_path_str, e))?;
-        }
-
-        Ok(())
-    }
-
-    /// Get the platform-specific extension filename for sqlite-lembed
-    fn get_lembed_extension_filename() -> String {
-        #[cfg(target_os = "linux")]
-        {
-            "lembed0.so".to_string()
-        }
-        
-        #[cfg(target_os = "macos")]
-        {
-            // On macOS, use architecture-specific binaries
-            match std::env::consts::ARCH {
-                "aarch64" => "lembed0-aarch64.dylib".to_string(),
-                "x86_64" => "lembed0-x86_64.dylib".to_string(),
-                arch => panic!("Unsupported macOS architecture: {}", arch),
-            }
-        }
-        
-        #[cfg(target_os = "windows")]
-        {
-            "lembed0.dll".to_string()
-        }
-        
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-        {
-            compile_error!("Unsupported operating system");
-        }
-    }
-
-    /// Register the embedding model for a connection
-    /// The model is registered in temp.lembed_models which is a temporary table,
-    /// so it needs to be re-registered for each new connection
-    fn register_embedding_model(conn: &Connection, resource_dir: &PathBuf) -> Result<(), String> {
-        let model_path = resource_dir.join("all-MiniLM-L6-v2.q8_0.gguf");
-        let model_path_str = model_path
-            .to_str()
-            .ok_or("Invalid model path")?;
-
-        conn.execute(
-            "INSERT INTO temp.lembed_models(name, model) SELECT 'all-MiniLM-L6-v2', lembed_model_from_file(?1)",
-            [model_path_str],
-        )
-        .map_err(|e| format!("Failed to register embedding model: {}", e))?;
-
-        Ok(())
-    }
-
     /// Create a new connection to the same database
     /// This is useful for background tasks that need their own connection
-    /// The connection will have sqlite-lembed loaded and the model registered
     pub fn new_connection(&self) -> Result<Connection, String> {
         let conn = Connection::open(&self.db_path)
             .map_err(|e| format!("Failed to open database connection: {}", e))?;
-
-        // Load sqlite-lembed extension and register model for this connection
-        Self::load_lembed_extension(&conn, &self.resource_dir)?;
-        Self::register_embedding_model(&conn, &self.resource_dir)?;
 
         Ok(conn)
     }
@@ -399,3 +305,36 @@ impl Database {
     }
 }
 
+/// Get the embedding dimension for a given model
+pub fn get_embedding_dimension(model: &str) -> usize {
+    match model {
+        "openai/text-embedding-3-small" => 1536,
+        "openai/text-embedding-3-large" => 3072,
+        _ => 1536, // Default to small model dimension
+    }
+}
+
+/// Recreate vec_chunks table with a new dimension and reset all atom embedding status
+pub fn recreate_vec_chunks_with_dimension(conn: &Connection, dimension: usize) -> Result<(), String> {
+    // Drop existing vec_chunks table
+    conn.execute("DROP TABLE IF EXISTS vec_chunks", [])
+        .map_err(|e| format!("Failed to drop vec_chunks table: {}", e))?;
+
+    // Create new vec_chunks table with the specified dimension
+    let create_sql = format!(
+        "CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{}])",
+        dimension
+    );
+    conn.execute(&create_sql, [])
+        .map_err(|e| format!("Failed to create vec_chunks table: {}", e))?;
+
+    // Reset all atom embedding status to pending so they get re-embedded
+    conn.execute("UPDATE atoms SET embedding_status = 'pending'", [])
+        .map_err(|e| format!("Failed to reset atom embedding status: {}", e))?;
+
+    // Clear all existing chunk data since it's invalid with new dimensions
+    conn.execute("DELETE FROM atom_chunks", [])
+        .map_err(|e| format!("Failed to clear atom_chunks: {}", e))?;
+
+    Ok(())
+}

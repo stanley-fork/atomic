@@ -179,3 +179,13 @@ export async function getConnectionCounts(
   return invoke('get_connection_counts', { minSimilarity });
 }
 
+// Model discovery types and commands
+export interface AvailableModel {
+  id: string;
+  name: string;
+}
+
+export async function getAvailableLlmModels(): Promise<AvailableModel[]> {
+  return invoke('get_available_llm_models');
+}
+

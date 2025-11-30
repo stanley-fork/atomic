@@ -83,22 +83,28 @@ Phase 1 (Foundation + Data Layer) features:
 /src-tauri
   /src
     main.rs           # Tauri entry point
-    lib.rs            # App setup, command registration, resource path resolution
-    db.rs             # SQLite setup, migrations, sqlite-lembed loading, model registration
+    lib.rs            # App setup, command registration
+    db.rs             # SQLite setup, migrations
     commands.rs       # All Tauri command implementations
     models.rs         # Rust structs for data
     chunking.rs       # Content chunking algorithm
     embedding.rs      # Embedding generation + tag extraction pipeline
-    extraction.rs     # OpenRouter API integration, tag extraction logic
+    extraction.rs     # Tag extraction logic using provider abstraction
     wiki.rs           # Wiki article generation and update logic
     settings.rs       # Settings CRUD operations
     chat.rs           # Conversation CRUD and scope management
-    agent.rs          # Agentic chat loop with tool calling
-  /resources
-    all-MiniLM-L6-v2.q8_0.gguf  # Bundled embedding model (~24MB, Q8_0 quantization)
-    lembed0.so                   # sqlite-lembed extension (Linux x86_64)
-    lembed0-aarch64.dylib        # sqlite-lembed extension (macOS Apple Silicon)
-    lembed0-x86_64.dylib         # sqlite-lembed extension (macOS Intel)
+    agent.rs          # Agentic chat loop with tool calling and streaming
+    clustering.rs     # Atom clustering for canvas visualization
+    /providers        # Pluggable AI provider abstraction
+      mod.rs          # Module exports
+      types.rs        # Message, ToolCall, CompletionResponse, StreamDelta, etc.
+      error.rs        # ProviderError enum with retry support
+      traits.rs       # EmbeddingProvider, LlmProvider, StreamingLlmProvider traits
+      registry.rs     # Provider factory (for future multi-provider support)
+      /openrouter     # OpenRouter provider implementation
+        mod.rs        # OpenRouterProvider combining embedding + LLM
+        embedding.rs  # Embedding API calls
+        llm.rs        # Chat completion + streaming
   Cargo.toml
   tauri.conf.json
 
@@ -298,15 +304,22 @@ CREATE TABLE chat_citations (
   relevance_score REAL
 );
 
--- Temporary table for sqlite-lembed model registration (per-connection)
--- temp.lembed_models(name TEXT, model BLOB)
 ```
 
 ### Settings Keys
-- `openrouter_api_key`: User's OpenRouter API key for LLM access
+- `openrouter_api_key`: User's OpenRouter API key for LLM and embedding access
 - `auto_tagging_enabled`: "true" or "false" (default: "true")
-- `tagging_model`: OpenRouter model ID for tag extraction (default: "openai/gpt-4o-mini")
-- `chat_model`: OpenRouter model ID for chat (default: "anthropic/claude-sonnet-4")
+- `embedding_model`: Model for embeddings (default: "openai/text-embedding-3-small")
+  - Supported: `openai/text-embedding-3-small` (1536 dim), `openai/text-embedding-3-large` (3072 dim)
+  - Changing dimension requires re-embedding all atoms (handled automatically)
+- `tagging_model`: Model for tag extraction (default: "openai/gpt-4o-mini")
+  - Supported: `openai/gpt-4o-mini`, `openai/gpt-5-nano`, `openai/gpt-5-mini`, `anthropic/claude-sonnet-4.5`
+- `wiki_model`: Model for wiki generation (default: "anthropic/claude-sonnet-4.5")
+  - Supported: `anthropic/claude-sonnet-4.5`, `openai/gpt-4o-mini`, `openai/gpt-5-nano`
+- `chat_model`: Model for chat (default: "anthropic/claude-sonnet-4.5")
+  - Supported: `anthropic/claude-sonnet-4.5`, `openai/gpt-4o-mini`, `openai/gpt-5-nano`
+
+Note: LLM models are restricted to those supporting structured outputs via OpenRouter.
 
 ## Tauri Commands (API)
 

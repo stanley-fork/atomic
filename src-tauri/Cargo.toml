@@ -28,6 +28,7 @@ futures = "0.3"
 regex = "1"
 actix-web = "4.9"
 actix-cors = "0.7"
+async-trait = "0.1"
 
 [profile.release]
 opt-level = "z"        # Optimize for size

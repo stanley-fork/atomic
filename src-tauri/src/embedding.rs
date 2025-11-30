@@ -6,9 +6,11 @@ use crate::extraction::{
     tag_names_to_ids,
 };
 use crate::models::EmbeddingCompletePayload;
+use crate::providers::models::{fetch_and_return_capabilities, get_cached_capabilities_sync, save_capabilities_cache};
+use crate::providers::openrouter::OpenRouterProvider;
+use crate::providers::traits::{EmbeddingConfig, EmbeddingProvider};
 use crate::settings;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -22,55 +24,33 @@ static EMBEDDING_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| {
     Semaphore::new(MAX_CONCURRENT_EMBEDDINGS)
 });
 
-// OpenRouter Embeddings API types
-#[derive(Serialize)]
-struct OpenRouterEmbeddingRequest {
-    model: String,
-    input: Vec<String>,
-}
+/// Generate embeddings via provider abstraction (batch support)
+/// Uses the configured embedding model from settings or defaults to text-embedding-3-small
+pub async fn generate_embeddings_with_provider(
+    api_key: &str,
+    texts: &[String],
+    model: Option<&str>,
+) -> Result<Vec<Vec<f32>>, String> {
+    let provider = OpenRouterProvider::new(api_key.to_string());
+    let config = EmbeddingConfig::new(
+        model.unwrap_or("openai/text-embedding-3-small")
+    );
 
-#[derive(Deserialize)]
-struct OpenRouterEmbeddingResponse {
-    data: Vec<EmbeddingData>,
-}
-
-#[derive(Deserialize)]
-struct EmbeddingData {
-    embedding: Vec<f32>,
+    provider
+        .embed_batch(texts, &config)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Generate embeddings via OpenRouter API (batch support)
+/// DEPRECATED: Use generate_embeddings_with_provider instead
+/// Kept for backward compatibility with existing code
 pub async fn generate_openrouter_embeddings_public(
-    client: &Client,
+    _client: &Client,
     api_key: &str,
     texts: &[String],
 ) -> Result<Vec<Vec<f32>>, String> {
-    let request = OpenRouterEmbeddingRequest {
-        model: "openai/text-embedding-3-small".to_string(),
-        input: texts.to_vec(),
-    };
-
-    let response = client
-        .post("https://openrouter.ai/api/v1/embeddings")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| format!("OpenRouter embeddings request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("OpenRouter embeddings API error: {} - {}", status, body));
-    }
-
-    let embedding_response: OpenRouterEmbeddingResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse OpenRouter embeddings response: {}", e))?;
-
-    Ok(embedding_response.data.into_iter().map(|d| d.embedding).collect())
+    generate_embeddings_with_provider(api_key, texts, None).await
 }
 
 /// Convert f32 vector to binary blob for sqlite-vec
@@ -202,7 +182,7 @@ async fn process_embeddings(
     content: &str,
 ) -> Result<(Vec<String>, Vec<String>), String> {
     // Scope to ensure connection is dropped before any async operations
-    let (auto_tagging_enabled, api_key, tagging_model, chunks) = {
+    let (auto_tagging_enabled, api_key, tagging_model, embedding_model, chunks) = {
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
 
         // Set status to processing
@@ -226,6 +206,10 @@ async fn process_embeddings(
             .get("tagging_model")
             .cloned()
             .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
+        let embedding_model = settings_map
+            .get("embedding_model")
+            .cloned()
+            .unwrap_or_else(|| "openai/text-embedding-3-small".to_string());
 
         // First, get existing chunk IDs for this atom to delete from vec_chunks
         let existing_chunk_ids: Vec<String> = {
@@ -263,19 +247,55 @@ async fn process_embeddings(
             return Ok((Vec::new(), Vec::new()));
         }
 
-        (auto_tagging_enabled, api_key, tagging_model, chunks)
+        (auto_tagging_enabled, api_key, tagging_model, embedding_model, chunks)
     }; // Connection dropped here
 
-    // Create HTTP client for OpenRouter API
+    // Create HTTP client for OpenRouter API (still used for tag extraction)
     let client = Client::new();
+
+    // Load model capabilities for parameter filtering
+    let supported_params: Option<Vec<String>> = if auto_tagging_enabled {
+        // Step 1: Check cache (sync, with lock)
+        let (cached, is_stale) = {
+            let conn = db.conn.lock().map_err(|e| e.to_string())?;
+            match get_cached_capabilities_sync(&conn) {
+                Ok(Some(cache)) => {
+                    let stale = cache.is_stale();
+                    (Some(cache), stale)
+                }
+                Ok(None) => (None, true),
+                Err(_) => (None, true),
+            }
+        }; // Lock dropped here
+
+        // Step 2: Fetch fresh if needed (async, no lock)
+        let capabilities = if is_stale {
+            match fetch_and_return_capabilities(&client).await {
+                Ok(fresh_cache) => {
+                    // Step 3: Save to DB (sync, with new connection)
+                    if let Ok(conn) = db.new_connection() {
+                        let _ = save_capabilities_cache(&conn, &fresh_cache);
+                    }
+                    fresh_cache
+                }
+                Err(_) => cached.unwrap_or_default(),
+            }
+        } else {
+            cached.unwrap_or_default()
+        };
+
+        capabilities.get_supported_params(&tagging_model).cloned()
+    } else {
+        None
+    };
 
     // Track all tag IDs and new tag IDs across all chunks
     let mut all_tag_ids: Vec<String> = Vec::new();
     let mut all_new_tag_ids: Vec<String> = Vec::new();
 
-    // Generate all embeddings via OpenRouter in one batch
+    // Generate all embeddings via provider in one batch
     let chunk_texts: Vec<String> = chunks.iter().map(|s| s.to_string()).collect();
-    let embeddings = generate_openrouter_embeddings_public(&client, &api_key, &chunk_texts)
+    let embeddings = generate_embeddings_with_provider(&api_key, &chunk_texts, Some(&embedding_model))
         .await
         .map_err(|e| format!("Failed to generate embeddings: {}", e))?;
 
@@ -316,7 +336,7 @@ async fn process_embeddings(
 
         // Extract tags with current tag tree (includes tags from previous chunks)
         if auto_tagging_enabled {
-            match extract_tags_from_chunk(&client, &api_key, chunk_content, &tag_tree_json, &tagging_model).await {
+            match extract_tags_from_chunk(&client, &api_key, chunk_content, &tag_tree_json, &tagging_model, supported_params.clone()).await {
                 Ok(result) => {
                     let conn = db.conn.lock().map_err(|e| e.to_string())?;
 
@@ -368,7 +388,7 @@ async fn process_embeddings(
         }; // Lock dropped here
 
         // Call consolidation (async operation without lock)
-        match consolidate_atom_tags(&client, &api_key, tag_info, &tagging_model).await {
+        match consolidate_atom_tags(&client, &api_key, tag_info, &tagging_model, supported_params.clone()).await {
             Ok(consolidation) => {
                 // Re-acquire connection for consolidation operations
                 let conn = db.conn.lock().map_err(|e| e.to_string())?;

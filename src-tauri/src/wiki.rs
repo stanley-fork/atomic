@@ -1,61 +1,13 @@
 use crate::models::{ChunkWithContext, WikiArticle, WikiArticleWithCitations, WikiCitation};
+use crate::providers::openrouter::OpenRouterProvider;
+use crate::providers::traits::{LlmConfig, LlmProvider};
+use crate::providers::types::{GenerationParams, Message, StructuredOutputSchema};
 use chrono::Utc;
 use reqwest::Client;
 use rusqlite::{Connection, params_from_iter};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 use regex::Regex;
-
-// OpenRouter API request/response types (similar to extraction.rs)
-#[derive(Serialize)]
-struct OpenRouterRequest {
-    model: String,
-    messages: Vec<Message>,
-    response_format: ResponseFormat,
-    temperature: f32,
-    max_tokens: u32,
-    provider: ProviderPreferences,
-}
-
-#[derive(Serialize)]
-struct Message {
-    role: String,
-    content: String,
-}
-
-#[derive(Serialize)]
-struct ResponseFormat {
-    #[serde(rename = "type")]
-    format_type: String,
-    json_schema: JsonSchemaWrapper,
-}
-
-#[derive(Serialize)]
-struct JsonSchemaWrapper {
-    name: String,
-    strict: bool,
-    schema: serde_json::Value,
-}
-
-#[derive(Serialize)]
-struct ProviderPreferences {
-    require_parameters: bool,
-}
-
-#[derive(Deserialize)]
-struct OpenRouterResponse {
-    choices: Vec<Choice>,
-}
-
-#[derive(Deserialize)]
-struct Choice {
-    message: MessageContent,
-}
-
-#[derive(Deserialize)]
-struct MessageContent {
-    content: Option<String>,
-}
 
 #[derive(Deserialize)]
 struct WikiGenerationResult {
@@ -230,6 +182,7 @@ pub async fn generate_wiki_content(
     client: &Client,
     api_key: &str,
     input: &WikiGenerationInput,
+    model: &str,
 ) -> Result<WikiArticleWithCitations, String> {
     // Build source materials for prompt
     let mut source_materials = String::new();
@@ -244,7 +197,7 @@ pub async fn generate_wiki_content(
     );
 
     // Call OpenRouter API
-    let result = call_openrouter_for_wiki(client, api_key, WIKI_GENERATION_SYSTEM_PROMPT, &user_content).await?;
+    let result = call_openrouter_for_wiki(client, api_key, WIKI_GENERATION_SYSTEM_PROMPT, &user_content, model).await?;
 
     // Create article
     let article_id = Uuid::new_v4().to_string();
@@ -270,6 +223,7 @@ pub async fn update_wiki_content(
     client: &Client,
     api_key: &str,
     input: &WikiUpdateInput,
+    model: &str,
 ) -> Result<WikiArticleWithCitations, String> {
     // Build existing sources section
     let mut existing_sources = String::new();
@@ -294,7 +248,7 @@ pub async fn update_wiki_content(
     );
 
     // Call OpenRouter API
-    let result = call_openrouter_for_wiki(client, api_key, WIKI_UPDATE_SYSTEM_PROMPT, &user_content).await?;
+    let result = call_openrouter_for_wiki(client, api_key, WIKI_UPDATE_SYSTEM_PROMPT, &user_content, model).await?;
 
     // Create updated article
     let now = Utc::now().to_rfc3339();
@@ -461,10 +415,11 @@ fn distance_to_similarity(distance: f32) -> f32 {
 
 /// Call OpenRouter API for wiki generation
 async fn call_openrouter_for_wiki(
-    client: &Client,
+    _client: &Client, // Kept for backward compatibility, not used
     api_key: &str,
     system_prompt: &str,
     user_content: &str,
+    model: &str,
 ) -> Result<WikiGenerationResult, String> {
     let schema = serde_json::json!({
         "type": "object",
@@ -483,32 +438,19 @@ async fn call_openrouter_for_wiki(
         "additionalProperties": false
     });
 
-    let request = OpenRouterRequest {
-        model: "anthropic/claude-sonnet-4.5".to_string(),
-        messages: vec![
-            Message {
-                role: "system".to_string(),
-                content: system_prompt.to_string(),
-            },
-            Message {
-                role: "user".to_string(),
-                content: user_content.to_string(),
-            },
-        ],
-        response_format: ResponseFormat {
-            format_type: "json_schema".to_string(),
-            json_schema: JsonSchemaWrapper {
-                name: "wiki_generation_result".to_string(),
-                strict: true,
-                schema,
-            },
-        },
-        temperature: 0.3,
-        max_tokens: 4000,
-        provider: ProviderPreferences {
-            require_parameters: true,
-        },
-    };
+    let messages = vec![
+        Message::system(system_prompt),
+        Message::user(user_content),
+    ];
+
+    let config = LlmConfig::new(model).with_params(
+        GenerationParams::new()
+            .with_temperature(0.3)
+            .with_max_tokens(4000)
+            .with_structured_output(StructuredOutputSchema::new("wiki_generation_result", schema)),
+    );
+
+    let provider = OpenRouterProvider::new(api_key.to_string());
 
     // Retry logic with exponential backoff
     let mut last_error = String::new();
@@ -517,45 +459,32 @@ async fn call_openrouter_for_wiki(
             tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
         }
 
-        let response = client
-            .post("https://openrouter.ai/api/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .header("HTTP-Referer", "https://atomic.app")
-            .header("X-Title", "Atomic")
-            .json(&request)
-            .send()
-            .await;
+        match provider.complete(&messages, &config).await {
+            Ok(response) => {
+                let content = &response.content;
+                if !content.is_empty() {
+                    // Log the raw LLM output
+                    eprintln!("=== WIKI GENERATION LLM OUTPUT ===");
+                    eprintln!("{}", content);
+                    eprintln!("==================================");
 
-        match response {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    let body = resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
-                    
-                    let openrouter_response: OpenRouterResponse = serde_json::from_str(&body)
-                        .map_err(|e| format!("Failed to parse OpenRouter response: {} - Body: {}", e, body))?;
-                    
-                    if let Some(choice) = openrouter_response.choices.first() {
-                        if let Some(content) = &choice.message.content {
-                            let result: WikiGenerationResult = serde_json::from_str(content)
-                                .map_err(|e| format!("Failed to parse wiki result: {} - Content: {}", e, content))?;
-                            return Ok(result);
-                        }
-                    }
-                    return Err("No content in response".to_string());
-                } else if resp.status().as_u16() == 429 {
-                    last_error = "Rate limited".to_string();
-                    continue;
-                } else {
-                    let status = resp.status();
-                    let body = resp.text().await.unwrap_or_default();
-                    last_error = format!("API error ({}): {}", status, body);
-                    break;
+                    // Parse the wiki result from the content
+                    let result: WikiGenerationResult = serde_json::from_str(content)
+                        .map_err(|e| format!("Failed to parse wiki result: {} - Content: {}", e, content))?;
+                    return Ok(result);
                 }
+                return Err("No content in response".to_string());
             }
             Err(e) => {
-                last_error = format!("Network error: {}", e);
-                continue;
+                let err_str = e.to_string();
+                if e.is_retryable() {
+                    last_error = err_str;
+                    continue;
+                } else {
+                    // Don't retry on non-retryable errors
+                    last_error = err_str;
+                    break;
+                }
             }
         }
     }

@@ -18,6 +18,16 @@ pub fn get_all_settings(conn: &Connection) -> Result<HashMap<String, String>, St
     Ok(settings)
 }
 
+/// Get a single setting by key
+pub fn get_setting(conn: &Connection, key: &str) -> Result<String, String> {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("Failed to get setting '{}': {}", key, e))
+}
+
 /// Set a setting (upsert)
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
     conn.execute(

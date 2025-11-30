@@ -2,115 +2,16 @@ use crate::db::Database;
 use crate::models::{
     ChatCitation, ChatMessage, ChatMessageWithContext, ChatToolCall, SemanticSearchResult,
 };
+use crate::providers::openrouter::OpenRouterProvider;
+use crate::providers::traits::{LlmConfig, StreamingLlmProvider};
+use crate::providers::types::{GenerationParams, Message, StreamDelta, ToolDefinition};
 use chrono::Utc;
-use futures::StreamExt;
-use reqwest::Client;
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
-
-// ==================== OpenRouter API Types ====================
-
-#[derive(Serialize, Debug)]
-struct OpenRouterRequest {
-    model: String,
-    messages: Vec<Message>,
-    tools: Vec<Tool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<String>,
-    temperature: f32,
-    max_tokens: u32,
-    stream: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct Message {
-    role: String,
-    content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<ToolCallResponse>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-}
-
-#[derive(Serialize, Debug, Clone)]
-struct Tool {
-    #[serde(rename = "type")]
-    tool_type: String,
-    function: FunctionDef,
-}
-
-#[derive(Serialize, Debug, Clone)]
-struct FunctionDef {
-    name: String,
-    description: String,
-    parameters: serde_json::Value,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct ToolCallResponse {
-    id: String,
-    #[serde(rename = "type")]
-    call_type: String,
-    function: FunctionCall,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct FunctionCall {
-    name: String,
-    arguments: String,
-}
-
-// ==================== Streaming Response Types ====================
-
-#[derive(Deserialize, Debug)]
-struct StreamingResponse {
-    choices: Vec<StreamingChoice>,
-}
-
-#[derive(Deserialize, Debug)]
-struct StreamingChoice {
-    delta: StreamingDelta,
-    #[allow(dead_code)]
-    finish_reason: Option<String>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-struct StreamingDelta {
-    #[allow(dead_code)]
-    role: Option<String>,
-    content: Option<String>,
-    tool_calls: Option<Vec<StreamingToolCall>>,
-}
-
-#[derive(Deserialize, Debug)]
-struct StreamingToolCall {
-    index: usize,
-    id: Option<String>,
-    #[serde(rename = "type")]
-    call_type: Option<String>,
-    function: Option<StreamingFunction>,
-}
-
-#[derive(Deserialize, Debug)]
-struct StreamingFunction {
-    name: Option<String>,
-    arguments: Option<String>,
-}
-
-// Accumulator for building complete tool calls from streaming deltas
-#[derive(Debug, Default, Clone)]
-struct ToolCallAccumulator {
-    id: String,
-    call_type: String,
-    name: String,
-    arguments: String,
-}
 
 // ==================== Event Payloads ====================
 
@@ -143,47 +44,41 @@ struct ChatComplete {
 
 // ==================== Tool Definitions ====================
 
-fn get_tools() -> Vec<Tool> {
+fn get_tools() -> Vec<ToolDefinition> {
     vec![
-        Tool {
-            tool_type: "function".to_string(),
-            function: FunctionDef {
-                name: "search_atoms".to_string(),
-                description: "Search for relevant atoms using semantic similarity. Use this to find information related to a specific topic or question.".to_string(),
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query to find relevant atoms"
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of results to return (default: 5)",
-                            "default": 5
-                        }
+        ToolDefinition::new(
+            "search_atoms",
+            "Search for relevant atoms using semantic similarity. Use this to find information related to a specific topic or question.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to find relevant atoms"
                     },
-                    "required": ["query"]
-                }),
-            },
-        },
-        Tool {
-            tool_type: "function".to_string(),
-            function: FunctionDef {
-                name: "get_atom".to_string(),
-                description: "Get the full content of a specific atom by its ID. Use this when you need more detail about an atom returned from search.".to_string(),
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "atom_id": {
-                            "type": "string",
-                            "description": "The ID of the atom to retrieve"
-                        }
-                    },
-                    "required": ["atom_id"]
-                }),
-            },
-        },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default: 5)",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            }),
+        ),
+        ToolDefinition::new(
+            "get_atom",
+            "Get the full content of a specific atom by its ID. Use this when you need more detail about an atom returned from search.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "atom_id": {
+                        "type": "string",
+                        "description": "The ID of the atom to retrieve"
+                    }
+                },
+                "required": ["atom_id"]
+            }),
+        ),
     ]
 }
 
@@ -213,125 +108,6 @@ fn execute_get_atom(db: &Database, atom_id: &str) -> Result<Option<String>, Stri
             Err(format!("Failed to get atom: {}", e))
         }
     })
-}
-
-// ==================== Streaming Response Processing ====================
-
-/// Result of processing a streaming response
-struct StreamingResult {
-    content: String,
-    tool_calls: Option<Vec<ToolCallResponse>>,
-}
-
-/// Process SSE stream from OpenRouter and emit deltas
-async fn process_streaming_response(
-    response: reqwest::Response,
-    app_handle: &AppHandle,
-    conversation_id: &str,
-) -> Result<StreamingResult, String> {
-    let mut content = String::new();
-    let mut tool_call_accumulators: Vec<ToolCallAccumulator> = Vec::new();
-    let mut buffer = String::new();
-
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("Stream error: {}", e))?;
-        let chunk_str = String::from_utf8_lossy(&chunk);
-        buffer.push_str(&chunk_str);
-
-        // Process complete lines from buffer
-        while let Some(line_end) = buffer.find('\n') {
-            let line = buffer[..line_end].trim().to_string();
-            buffer = buffer[line_end + 1..].to_string();
-
-            // Skip empty lines
-            if line.is_empty() {
-                continue;
-            }
-
-            // Check for stream end
-            if line == "data: [DONE]" {
-                break;
-            }
-
-            // Parse SSE data line
-            if let Some(json_str) = line.strip_prefix("data: ") {
-                match serde_json::from_str::<StreamingResponse>(json_str) {
-                    Ok(response) => {
-                        if let Some(choice) = response.choices.first() {
-                            // Handle content delta
-                            if let Some(delta_content) = &choice.delta.content {
-                                content.push_str(delta_content);
-                                // Emit full accumulated content to frontend
-                                // (more robust than deltas - avoids duplication from race conditions)
-                                let _ = app_handle.emit(
-                                    "chat-stream-delta",
-                                    ChatStreamDelta {
-                                        conversation_id: conversation_id.to_string(),
-                                        content: content.clone(),
-                                    },
-                                );
-                            }
-
-                            // Handle tool call deltas
-                            if let Some(tool_calls) = &choice.delta.tool_calls {
-                                for tc in tool_calls {
-                                    // Ensure accumulator exists for this index
-                                    while tool_call_accumulators.len() <= tc.index {
-                                        tool_call_accumulators.push(ToolCallAccumulator::default());
-                                    }
-
-                                    let acc = &mut tool_call_accumulators[tc.index];
-
-                                    // Accumulate fields
-                                    if let Some(id) = &tc.id {
-                                        acc.id = id.clone();
-                                    }
-                                    if let Some(call_type) = &tc.call_type {
-                                        acc.call_type = call_type.clone();
-                                    }
-                                    if let Some(func) = &tc.function {
-                                        if let Some(name) = &func.name {
-                                            acc.name = name.clone();
-                                        }
-                                        if let Some(args) = &func.arguments {
-                                            acc.arguments.push_str(args);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Log parse errors but continue (some lines may be malformed)
-                        eprintln!("Failed to parse streaming response: {} - {}", e, json_str);
-                    }
-                }
-            }
-        }
-    }
-
-    // Convert accumulators to ToolCallResponse
-    let tool_calls = if tool_call_accumulators.is_empty() {
-        None
-    } else {
-        Some(
-            tool_call_accumulators
-                .into_iter()
-                .map(|acc| ToolCallResponse {
-                    id: acc.id,
-                    call_type: acc.call_type,
-                    function: FunctionCall {
-                        name: acc.name,
-                        arguments: acc.arguments,
-                    },
-                })
-                .collect(),
-        )
-    };
-
-    Ok(StreamingResult { content, tool_calls })
 }
 
 // ==================== System Prompt ====================
@@ -375,73 +151,65 @@ async fn run_agent_loop(
     model: String,
     mut ctx: AgentContext,
 ) -> Result<ChatMessageWithContext, String> {
-    let client = Client::new();
+    let provider = OpenRouterProvider::new(api_key);
     let tools = get_tools();
     let max_iterations = 10;
 
-    for iteration in 0..max_iterations {
-        // Build request - use streaming for final answers, non-streaming for tool calls iteration
-        // We always use streaming now to get token-by-token output
-        let request = OpenRouterRequest {
-            model: model.clone(),
-            messages: ctx.messages.clone(),
-            tools: tools.clone(),
-            tool_choice: if iteration == max_iterations - 1 {
-                Some("none".to_string()) // Force final answer on last iteration
-            } else {
-                None
-            },
-            temperature: 0.7,
-            max_tokens: 4000,
-            stream: true, // Enable streaming for real-time token output
-        };
+    for _iteration in 0..max_iterations {
+        // Create config for this request
+        let config = LlmConfig::new(&model).with_params(
+            GenerationParams::new()
+                .with_temperature(0.7)
+                .with_max_tokens(4000),
+        );
 
-        // Call OpenRouter
-        let response = client
-            .post("https://openrouter.ai/api/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
+        // Create callback to emit streaming content to frontend
+        let accumulated_content = Arc::new(Mutex::new(String::new()));
+        let accumulated_clone = Arc::clone(&accumulated_content);
+        let conversation_id_clone = ctx.conversation_id.clone();
+        let app_handle_clone = app_handle.clone();
+
+        let on_delta = Box::new(move |delta: StreamDelta| {
+            match delta {
+                StreamDelta::Content(text) => {
+                    let mut content = accumulated_clone.lock().unwrap();
+                    content.push_str(&text);
+                    // Emit full accumulated content to frontend
+                    let _ = app_handle_clone.emit(
+                        "chat-stream-delta",
+                        ChatStreamDelta {
+                            conversation_id: conversation_id_clone.clone(),
+                            content: content.clone(),
+                        },
+                    );
+                }
+                _ => {} // Tool call events are handled separately
+            }
+        });
+
+        // Call provider with streaming and tools
+        let response = provider
+            .complete_streaming_with_tools(&ctx.messages, &tools, &config, on_delta)
             .await
             .map_err(|e| format!("API request failed: {}", e))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, text));
-        }
-
-        // Process the streaming response
-        let streaming_result = process_streaming_response(
-            response,
-            &app_handle,
-            &ctx.conversation_id,
-        )
-        .await?;
-
         // Check if there are tool calls
-        if let Some(tool_calls) = &streaming_result.tool_calls {
+        if let Some(tool_calls) = &response.tool_calls {
             // Add assistant message with tool calls to history
-            let assistant_content = if streaming_result.content.is_empty() {
-                None
+            if response.content.is_empty() {
+                ctx.messages.push(Message::assistant_with_tool_calls(tool_calls.clone()));
             } else {
-                Some(streaming_result.content.clone())
-            };
-            ctx.messages.push(Message {
-                role: "assistant".to_string(),
-                content: assistant_content,
-                tool_calls: Some(tool_calls.clone()),
-                tool_call_id: None,
-                name: None,
-            });
+                let mut msg = Message::assistant(&response.content);
+                msg.tool_calls = Some(tool_calls.clone());
+                ctx.messages.push(msg);
+            }
 
             // Execute each tool call
             for tool_call in tool_calls {
-                let tool_name = &tool_call.function.name;
+                let tool_name = tool_call.get_name().unwrap_or_default();
+                let tool_args_str = tool_call.get_arguments().unwrap_or_default();
                 let tool_args: serde_json::Value =
-                    serde_json::from_str(&tool_call.function.arguments)
-                        .unwrap_or(serde_json::Value::Null);
+                    serde_json::from_str(tool_args_str).unwrap_or(serde_json::Value::Null);
 
                 // Emit tool start event
                 let _ = app_handle.emit(
@@ -449,13 +217,13 @@ async fn run_agent_loop(
                     ChatToolStart {
                         conversation_id: ctx.conversation_id.clone(),
                         tool_call_id: tool_call.id.clone(),
-                        tool_name: tool_name.clone(),
+                        tool_name: tool_name.to_string(),
                         tool_input: tool_args.clone(),
                     },
                 );
 
                 // Execute tool
-                let (tool_result, results_count) = match tool_name.as_str() {
+                let (tool_result, results_count) = match tool_name {
                     "search_atoms" => {
                         let query = tool_args["query"].as_str().unwrap_or("");
                         let limit = tool_args["limit"].as_i64().unwrap_or(5) as i32;
@@ -504,7 +272,7 @@ async fn run_agent_loop(
                 ctx.tool_calls_record.push(ChatToolCall {
                     id: tool_call.id.clone(),
                     message_id: String::new(), // Will be set when saving
-                    tool_name: tool_name.clone(),
+                    tool_name: tool_name.to_string(),
                     tool_input: tool_args,
                     tool_output: Some(serde_json::Value::String(tool_result.clone())),
                     status: "complete".to_string(),
@@ -523,18 +291,12 @@ async fn run_agent_loop(
                 );
 
                 // Add tool result to messages
-                ctx.messages.push(Message {
-                    role: "tool".to_string(),
-                    content: Some(tool_result),
-                    tool_calls: None,
-                    tool_call_id: Some(tool_call.id.clone()),
-                    name: Some(tool_name.clone()),
-                });
+                ctx.messages.push(Message::tool_result(&tool_call.id, tool_result));
             }
         } else {
             // No tool calls - we have the final answer
             // Content was already streamed to frontend via chat-stream-delta events
-            let content = streaming_result.content;
+            let content = response.content;
 
             // Build citations from collected data
             let citations: Vec<ChatCitation> = ctx
@@ -657,6 +419,8 @@ fn save_citations(
 }
 
 fn get_conversation_messages(conn: &Connection, conversation_id: &str) -> Result<Vec<Message>, String> {
+    use crate::providers::types::MessageRole;
+
     let mut stmt = conn
         .prepare(
             "SELECT role, content FROM chat_messages WHERE conversation_id = ?1 ORDER BY message_index",
@@ -665,9 +429,17 @@ fn get_conversation_messages(conn: &Connection, conversation_id: &str) -> Result
 
     let messages = stmt
         .query_map([conversation_id], |row| {
+            let role_str: String = row.get(0)?;
+            let content: Option<String> = row.get(1)?;
+            let role = match role_str.as_str() {
+                "system" => MessageRole::System,
+                "assistant" => MessageRole::Assistant,
+                "tool" => MessageRole::Tool,
+                _ => MessageRole::User,
+            };
             Ok(Message {
-                role: row.get(0)?,
-                content: row.get(1)?,
+                role,
+                content,
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
@@ -774,13 +546,7 @@ pub async fn send_chat_message(
     };
 
     // Build message history for API
-    let mut api_messages = vec![Message {
-        role: "system".to_string(),
-        content: Some(get_system_prompt(&scope_description)),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }];
+    let mut api_messages = vec![Message::system(get_system_prompt(&scope_description))];
     api_messages.extend(messages);
 
     // Create agent context

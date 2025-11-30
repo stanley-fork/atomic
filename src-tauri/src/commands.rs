@@ -988,6 +988,24 @@ pub fn get_settings(db: State<Database>) -> Result<HashMap<String, String>, Stri
 #[tauri::command]
 pub fn set_setting(db: State<Database>, key: String, value: String) -> Result<(), String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
+
+    // Special handling for embedding_model changes - may require dimension change
+    if key == "embedding_model" {
+        let current_model = settings::get_setting(&conn, "embedding_model")
+            .unwrap_or_else(|_| "openai/text-embedding-3-small".to_string());
+
+        let current_dim = crate::db::get_embedding_dimension(&current_model);
+        let new_dim = crate::db::get_embedding_dimension(&value);
+
+        if current_dim != new_dim {
+            eprintln!(
+                "Embedding dimension changing from {} to {} - recreating vec_chunks",
+                current_dim, new_dim
+            );
+            crate::db::recreate_vec_chunks_with_dimension(&conn, new_dim)?;
+        }
+    }
+
     settings::set_setting(&conn, &key, &value)
 }
 
@@ -1019,6 +1037,56 @@ pub async fn test_openrouter_connection(api_key: String) -> Result<bool, String>
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         Err(format!("API error ({}): {}", status, body))
+    }
+}
+
+// Model discovery commands
+use crate::providers::{
+    fetch_and_return_capabilities, get_cached_capabilities_sync, save_capabilities_cache,
+    AvailableModel,
+};
+
+/// Get available LLM models that support structured outputs
+/// Uses cached capabilities if fresh, otherwise fetches from OpenRouter API
+#[tauri::command]
+pub async fn get_available_llm_models(
+    db: State<'_, Database>,
+) -> Result<Vec<AvailableModel>, String> {
+    // Check cache first (sync DB access)
+    let (cached, is_stale) = {
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        match get_cached_capabilities_sync(&conn) {
+            Ok(Some(cache)) => (Some(cache.clone()), cache.is_stale()),
+            Ok(None) => (None, true),
+            Err(_) => (None, true),
+        }
+    };
+
+    // If cache is fresh, return from cache
+    if let Some(ref cache) = cached {
+        if !is_stale {
+            return Ok(cache.get_models_with_structured_outputs());
+        }
+    }
+
+    // Fetch fresh capabilities from API
+    let client = reqwest::Client::new();
+    match fetch_and_return_capabilities(&client).await {
+        Ok(fresh_cache) => {
+            // Save to database
+            if let Ok(conn) = db.new_connection() {
+                let _ = save_capabilities_cache(&conn, &fresh_cache);
+            }
+            Ok(fresh_cache.get_models_with_structured_outputs())
+        }
+        Err(e) => {
+            // If we have a stale cache, use it as fallback
+            if let Some(cache) = cached {
+                Ok(cache.get_models_with_structured_outputs())
+            } else {
+                Err(format!("Failed to fetch models: {}", e))
+            }
+        }
     }
 }
 
@@ -1054,20 +1122,25 @@ pub async fn generate_wiki_article(
     tag_name: String,
 ) -> Result<crate::models::WikiArticleWithCitations, String> {
     // Get settings and prepare data
-    let api_key = {
+    let (api_key, wiki_model) = {
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
         let settings_map = settings::get_all_settings(&conn)?;
-        settings_map
+        let api_key = settings_map
             .get("openrouter_api_key")
             .cloned()
-            .ok_or("OpenRouter API key not configured. Please set it in Settings.")?
+            .ok_or("OpenRouter API key not configured. Please set it in Settings.")?;
+        let wiki_model = settings_map
+            .get("wiki_model")
+            .cloned()
+            .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string());
+        (api_key, wiki_model)
     };
 
     let input = wiki::prepare_wiki_generation(&db, &api_key, &tag_id, &tag_name).await?;
 
     // Generate article via API (async, no db lock needed)
     let client = reqwest::Client::new();
-    let result = wiki::generate_wiki_content(&client, &api_key, &input).await?;
+    let result = wiki::generate_wiki_content(&client, &api_key, &input, &wiki_model).await?;
 
     // Save to database (sync, with db lock)
     {
@@ -1086,19 +1159,23 @@ pub async fn update_wiki_article(
     tag_name: String,
 ) -> Result<crate::models::WikiArticleWithCitations, String> {
     // Get settings, existing article, and prepare update data (sync, with db lock)
-    let (api_key, existing, update_input) = {
+    let (api_key, wiki_model, existing, update_input) = {
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
         let settings_map = settings::get_all_settings(&conn)?;
         let api_key = settings_map.get("openrouter_api_key").cloned();
+        let wiki_model = settings_map
+            .get("wiki_model")
+            .cloned()
+            .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string());
         let existing = wiki::load_wiki_article(&conn, &tag_id)?;
-        
+
         let update_input = if let Some(ref ex) = existing {
             wiki::prepare_wiki_update(&conn, &tag_id, &tag_name, &ex.article, &ex.citations)?
         } else {
             None
         };
-        
-        (api_key, existing, update_input)
+
+        (api_key, wiki_model, existing, update_input)
     };
     // Lock released here
 
@@ -1116,7 +1193,7 @@ pub async fn update_wiki_article(
 
     // Update article via API (async, no db lock needed)
     let client = reqwest::Client::new();
-    let result = wiki::update_wiki_content(&client, &api_key, &input).await?;
+    let result = wiki::update_wiki_content(&client, &api_key, &input, &wiki_model).await?;
 
     // Save to database (sync, with db lock)
     {

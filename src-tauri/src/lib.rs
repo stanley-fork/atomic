@@ -8,6 +8,7 @@ mod embedding;
 mod extraction;
 mod http_server;
 mod models;
+mod providers;
 mod settings;
 mod wiki;
 
@@ -83,6 +84,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_setting,
             commands::test_openrouter_connection,
+            commands::get_available_llm_models,
             commands::get_wiki_article,
             commands::get_wiki_article_status,
             commands::generate_wiki_article,
