@@ -4,7 +4,9 @@ pub use atomic_core::providers::{
     // Config
     ProviderConfig, ProviderType,
     // Factory functions
-    create_embedding_provider, create_streaming_llm_provider,
+    create_streaming_llm_provider,
+    // Cached factory functions
+    get_embedding_provider, get_model_capabilities,
 };
 
 // Re-export commonly used items from models at top level

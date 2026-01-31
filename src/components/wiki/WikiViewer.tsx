@@ -12,22 +12,21 @@ interface WikiViewerProps {
 }
 
 export function WikiViewer({ tagId, tagName }: WikiViewerProps) {
-  const {
-    currentArticle,
-    articleStatus,
-    isLoading,
-    isGenerating,
-    isUpdating,
-    error,
-    fetchArticle,
-    fetchArticleStatus,
-    generateArticle,
-    updateArticle,
-    clearArticle,
-    clearError,
-  } = useWikiStore();
+  const currentArticle = useWikiStore(s => s.currentArticle);
+  const articleStatus = useWikiStore(s => s.articleStatus);
+  const isLoading = useWikiStore(s => s.isLoading);
+  const isGenerating = useWikiStore(s => s.isGenerating);
+  const isUpdating = useWikiStore(s => s.isUpdating);
+  const error = useWikiStore(s => s.error);
+  const fetchArticle = useWikiStore(s => s.fetchArticle);
+  const fetchArticleStatus = useWikiStore(s => s.fetchArticleStatus);
+  const generateArticle = useWikiStore(s => s.generateArticle);
+  const updateArticle = useWikiStore(s => s.updateArticle);
+  const clearArticle = useWikiStore(s => s.clearArticle);
+  const clearError = useWikiStore(s => s.clearError);
 
-  const { closeDrawer, openDrawer } = useUIStore();
+  const closeDrawer = useUIStore(s => s.closeDrawer);
+  const openDrawer = useUIStore(s => s.openDrawer);
 
   // Fetch article and status when component mounts or tagId changes
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { useUIStore } from '../../stores/ui';
 
 export function LoadingIndicator() {
-  const { loadingOperations } = useUIStore();
+  const loadingOperations = useUIStore(s => s.loadingOperations);
 
   if (loadingOperations.length === 0) return null;
 

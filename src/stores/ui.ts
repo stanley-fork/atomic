@@ -29,7 +29,7 @@ export interface LoadingOperation {
 
 interface UIStore {
   selectedTagId: string | null;
-  expandedTagIds: Set<string>;  // Tags that should be expanded in sidebar
+  expandedTagIds: Record<string, boolean>;  // Tags that should be expanded in sidebar
   drawerState: DrawerState;
   viewMode: ViewMode;
   searchQuery: string;
@@ -72,7 +72,7 @@ export const useUIStore = create<UIStore>()(
   persist(
     (set) => ({
       selectedTagId: null,
-      expandedTagIds: new Set<string>(),
+      expandedTagIds: {} as Record<string, boolean>,
       drawerState: {
         isOpen: false,
         mode: 'viewer',
@@ -98,20 +98,21 @@ export const useUIStore = create<UIStore>()(
       setSelectedTag: (tagId: string | null) => set({ selectedTagId: tagId }),
 
       expandTagPath: (tagIds: string[]) =>
-        set((state) => ({
-          expandedTagIds: new Set([...state.expandedTagIds, ...tagIds]),
-        })),
+        set((state) => {
+          const updated = { ...state.expandedTagIds };
+          for (const id of tagIds) {
+            updated[id] = true;
+          }
+          return { expandedTagIds: updated };
+        }),
 
       toggleTagExpanded: (tagId: string) =>
-        set((state) => {
-          const newSet = new Set(state.expandedTagIds);
-          if (newSet.has(tagId)) {
-            newSet.delete(tagId);
-          } else {
-            newSet.add(tagId);
-          }
-          return { expandedTagIds: newSet };
-        }),
+        set((state) => ({
+          expandedTagIds: {
+            ...state.expandedTagIds,
+            [tagId]: !state.expandedTagIds[tagId],
+          },
+        })),
 
       openDrawer: (mode: DrawerMode, atomId?: string, highlightText?: string) =>
         set({

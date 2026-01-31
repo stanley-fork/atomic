@@ -27,7 +27,12 @@ interface LocalGraphViewProps {
 }
 
 export function LocalGraphView({ onAtomClick }: LocalGraphViewProps) {
-  const { localGraph, navigateLocalGraph, goBackLocalGraph, closeLocalGraph, setLocalGraphDepth, openDrawer } = useUIStore();
+  const localGraph = useUIStore(s => s.localGraph);
+  const navigateLocalGraph = useUIStore(s => s.navigateLocalGraph);
+  const goBackLocalGraph = useUIStore(s => s.goBackLocalGraph);
+  const closeLocalGraph = useUIStore(s => s.closeLocalGraph);
+  const setLocalGraphDepth = useUIStore(s => s.setLocalGraphDepth);
+  const openDrawer = useUIStore(s => s.openDrawer);
   const [graph, setGraph] = useState<NeighborhoodGraph | null>(null);
   const [nodes, setNodes] = useState<SimulationNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);

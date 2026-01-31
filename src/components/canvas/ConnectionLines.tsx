@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 
 export interface Connection {
   sourceId: string;
@@ -9,23 +9,48 @@ export interface Connection {
   similarityScore?: number | null;
 }
 
+interface ViewportBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 interface ConnectionLinesProps {
   connections: Connection[];
   nodePositions: Map<string, { x: number; y: number }>;
   fadedAtomIds: Set<string>;
+  viewportBounds?: ViewportBounds;
+}
+
+function isInBounds(point: { x: number; y: number }, bounds: ViewportBounds): boolean {
+  return point.x >= bounds.left && point.x <= bounds.right &&
+         point.y >= bounds.top && point.y <= bounds.bottom;
 }
 
 export const ConnectionLines = memo(function ConnectionLines({
   connections,
   nodePositions,
   fadedAtomIds,
+  viewportBounds,
 }: ConnectionLinesProps) {
+  // Filter connections to those with at least one endpoint in viewport
+  const visibleConnections = useMemo(() => {
+    if (!viewportBounds) return connections;
+    return connections.filter(conn => {
+      const source = nodePositions.get(conn.sourceId);
+      const target = nodePositions.get(conn.targetId);
+      if (!source || !target) return false;
+      return isInBounds(source, viewportBounds) || isInBounds(target, viewportBounds);
+    });
+  }, [connections, nodePositions, viewportBounds]);
+
   return (
     <svg
       className="absolute top-0 left-0 w-full h-full pointer-events-none"
       style={{ zIndex: 0 }}
     >
-      {connections.map((conn) => {
+      {visibleConnections.map((conn) => {
         const source = nodePositions.get(conn.sourceId);
         const target = nodePositions.get(conn.targetId);
 

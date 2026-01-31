@@ -10,7 +10,7 @@ interface ChatHeaderProps {
 export function ChatHeader({ conversation, onBack }: ChatHeaderProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState(conversation.title || '');
-  const { updateConversationTitle } = useChatStore();
+  const updateConversationTitle = useChatStore(s => s.updateConversationTitle);
 
   const handleTitleSave = async () => {
     if (editedTitle.trim() !== conversation.title) {

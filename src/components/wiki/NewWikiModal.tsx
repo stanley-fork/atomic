@@ -83,8 +83,11 @@ interface FlatTag {
 export function NewWikiModal({ isOpen, onClose }: NewWikiModalProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<FlatTag | null>(null);
-  const { tags: allTags } = useTagsStore();
-  const { articles, openArticle, openAndGenerate, isGenerating } = useWikiStore();
+  const allTags = useTagsStore(s => s.tags);
+  const articles = useWikiStore(s => s.articles);
+  const openArticle = useWikiStore(s => s.openArticle);
+  const openAndGenerate = useWikiStore(s => s.openAndGenerate);
+  const isGenerating = useWikiStore(s => s.isGenerating);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Set of tag IDs that already have wiki articles

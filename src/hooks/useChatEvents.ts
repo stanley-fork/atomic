@@ -31,12 +31,10 @@ interface ChatError {
 }
 
 export function useChatEvents(conversationId: string | null) {
-  const {
-    appendStreamContent,
-    addRetrievalStep,
-    completeMessage,
-    setStreamingError,
-  } = useChatStore();
+  const appendStreamContent = useChatStore(s => s.appendStreamContent);
+  const addRetrievalStep = useChatStore(s => s.addRetrievalStep);
+  const completeMessage = useChatStore(s => s.completeMessage);
+  const setStreamingError = useChatStore(s => s.setStreamingError);
 
   useEffect(() => {
     if (!conversationId) return;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, MouseEvent } from 'react';
+import { useEffect, useRef, memo, MouseEvent } from 'react';
 import { TagWithCount } from '../../stores/tags';
 import { useUIStore } from '../../stores/ui';
 
@@ -10,12 +10,14 @@ interface TagNodeProps {
   onContextMenu: (e: MouseEvent, tag: TagWithCount) => void;
 }
 
-export function TagNode({ tag, level, selectedTagId, onSelect, onContextMenu }: TagNodeProps) {
+export const TagNode = memo(function TagNode({ tag, level, selectedTagId, onSelect, onContextMenu }: TagNodeProps) {
   const nodeRef = useRef<HTMLDivElement>(null);
-  const { openWikiDrawer, openChatDrawer, expandedTagIds, toggleTagExpanded } = useUIStore();
+  const openWikiDrawer = useUIStore(s => s.openWikiDrawer);
+  const openChatDrawer = useUIStore(s => s.openChatDrawer);
+  const isExpanded = useUIStore(s => !!s.expandedTagIds[tag.id]);
+  const toggleTagExpanded = useUIStore(s => s.toggleTagExpanded);
   const hasChildren = tag.children && tag.children.length > 0;
   const isSelected = selectedTagId === tag.id;
-  const isExpanded = expandedTagIds.has(tag.id);
 
   // Scroll into view when selected
   useEffect(() => {
@@ -116,5 +118,5 @@ export function TagNode({ tag, level, selectedTagId, onSelect, onContextMenu }: 
       )}
     </div>
   );
-}
+});
 

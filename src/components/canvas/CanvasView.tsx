@@ -89,6 +89,18 @@ export function CanvasView({
   const [error, setError] = useState<string | null>(null);
   const hasLoadedRef = useRef(false);
 
+  // Transform state for viewport culling
+  const [transformState, setTransformState] = useState({ scale: 1, positionX: 0, positionY: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleTransformed = useCallback((_ref: any, state: { scale: number; positionX: number; positionY: number }) => {
+    setTransformState({
+      scale: state.scale,
+      positionX: state.positionX,
+      positionY: state.positionY,
+    });
+  }, []);
+
   // Connection display options
   const [connectionOptions, setConnectionOptions] = useState<ConnectionOptions>({
     showTagConnections: true,
@@ -356,7 +368,7 @@ export function CanvasView({
   }
 
   return (
-    <div className="flex-1 relative overflow-hidden bg-[var(--color-bg-main)]">
+    <div ref={containerRef} className="flex-1 relative overflow-hidden bg-[var(--color-bg-main)]">
       {/* Simulation loading overlay */}
       {isSimulating && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-md px-4 py-2 flex items-center gap-2">
@@ -396,6 +408,7 @@ export function CanvasView({
           animationType: 'easeOut',
           equalToMove: true,
         }}
+        onTransformed={handleTransformed}
       >
         <ZoomToHighlight
           atomId={highlightedAtomId}
@@ -419,6 +432,9 @@ export function CanvasView({
             connectionCounts={connectionCounts}
             highlightedAtomId={highlightedAtomId}
             onAtomClick={onAtomClick}
+            transformState={transformState}
+            containerWidth={containerRef.current?.clientWidth ?? 800}
+            containerHeight={containerRef.current?.clientHeight ?? 600}
           />
         </TransformComponent>
       </TransformWrapper>

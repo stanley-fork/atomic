@@ -40,6 +40,10 @@ impl Database {
 
         let conn = Connection::open(path)?;
 
+        // Enable WAL mode for concurrent reads with single writer
+        // busy_timeout prevents SQLITE_BUSY when another connection holds a write lock
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;")?;
+
         if create {
             Self::run_migrations(&conn)?;
         }
@@ -50,9 +54,14 @@ impl Database {
         })
     }
 
-    /// Create a new connection to the same database
+    /// Create a new connection to the same database.
+    /// Registers sqlite-vec so the connection can query vec_chunks.
     pub fn new_connection(&self) -> Result<Connection, AtomicCoreError> {
-        Ok(Connection::open(&self.db_path)?)
+        // sqlite-vec is registered via sqlite3_auto_extension in open_internal,
+        // which applies to all connections opened after that call.
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;")?;
+        Ok(conn)
     }
 
     /// Run database migrations
@@ -167,25 +176,56 @@ impl Database {
             )?;
         }
 
-        // Create FTS5 table if it doesn't exist
-        let has_fts: bool = conn
+        // FTS5 table for keyword search (external content backed by atom_chunks).
+        // Must declare all atom_chunks columns so positional mapping is correct:
+        //   FTS5 col 0 (id)          -> atom_chunks col 0 (id)
+        //   FTS5 col 1 (atom_id)     -> atom_chunks col 1 (atom_id)
+        //   FTS5 col 2 (chunk_index) -> atom_chunks col 2 (chunk_index)
+        //   FTS5 col 3 (content)     -> atom_chunks col 3 (content)
+        //
+        // Migration: d9e8f91 introduced a broken 2-column schema (chunk_id, content)
+        // that caused incorrect positional mapping. Detect and fix it.
+        let fts_sql: String = conn
             .query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='atom_chunks_fts'",
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='atom_chunks_fts'",
                 [],
-                |_| Ok(true),
+                |row| row.get(0),
             )
-            .unwrap_or(false);
+            .unwrap_or_default();
 
-        if !has_fts {
+        if fts_sql.is_empty() {
+            // Table doesn't exist — create it
             conn.execute_batch(
                 r#"
                 CREATE VIRTUAL TABLE atom_chunks_fts USING fts5(
-                    chunk_id,
+                    id,
+                    atom_id,
+                    chunk_index,
                     content,
                     content='atom_chunks',
                     content_rowid='rowid'
                 );
                 "#,
+            )?;
+        } else if !fts_sql.contains("atom_id") {
+            // Old 2-column schema — drop and recreate with correct columns
+            conn.execute_batch("DROP TABLE IF EXISTS atom_chunks_fts")?;
+            conn.execute_batch(
+                r#"
+                CREATE VIRTUAL TABLE atom_chunks_fts USING fts5(
+                    id,
+                    atom_id,
+                    chunk_index,
+                    content,
+                    content='atom_chunks',
+                    content_rowid='rowid'
+                );
+                "#,
+            )?;
+            // Rebuild FTS index from existing atom_chunks data
+            conn.execute(
+                "INSERT INTO atom_chunks_fts(atom_chunks_fts) VALUES('rebuild')",
+                [],
             )?;
         }
 

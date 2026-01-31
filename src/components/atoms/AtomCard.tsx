@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { AtomWithTags } from '../../stores/atoms';
 import { TagChip } from '../tags/TagChip';
 import { extractTitleAndSnippet } from '../../lib/markdown';
@@ -5,10 +6,10 @@ import { formatRelativeDate } from '../../lib/date';
 
 interface AtomCardProps {
   atom: AtomWithTags;
-  onClick: () => void;
+  onAtomClick: (atomId: string) => void;
   viewMode: 'grid' | 'list';
   matchingChunkContent?: string;  // For search results
-  onRetryEmbedding?: () => void;  // For retry action
+  onRetryEmbedding?: (atomId: string) => void;  // For retry action
 }
 
 function ProcessingStatusIndicator({
@@ -83,13 +84,15 @@ function ProcessingStatusIndicator({
   return null;
 }
 
-export function AtomCard({
+export const AtomCard = memo(function AtomCard({
   atom,
-  onClick,
+  onAtomClick,
   viewMode,
   matchingChunkContent,
   onRetryEmbedding,
 }: AtomCardProps) {
+  const handleClick = () => onAtomClick(atom.id);
+  const handleRetry = onRetryEmbedding ? () => onRetryEmbedding(atom.id) : undefined;
   const { title, snippet } = extractTitleAndSnippet(atom.content, 120);
 
   const maxVisibleTags = viewMode === 'grid' ? 2 : 3;
@@ -99,13 +102,13 @@ export function AtomCard({
   if (viewMode === 'list') {
     return (
       <div
-        onClick={onClick}
+        onClick={handleClick}
         className="relative flex items-center gap-4 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg cursor-pointer hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] transition-all duration-150"
       >
         <ProcessingStatusIndicator
           embeddingStatus={atom.embedding_status}
           taggingStatus={atom.tagging_status}
-          onRetry={onRetryEmbedding}
+          onRetry={handleRetry}
         />
         <div className="flex-1 min-w-0">
           <p
@@ -135,13 +138,13 @@ export function AtomCard({
 
   return (
     <div
-      onClick={onClick}
+      onClick={handleClick}
       className="relative flex flex-col p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg cursor-pointer hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] transition-all duration-150 h-full"
     >
       <ProcessingStatusIndicator
         embeddingStatus={atom.embedding_status}
         taggingStatus={atom.tagging_status}
-        onRetry={onRetryEmbedding}
+        onRetry={handleRetry}
       />
       <div className="flex-1 min-h-0">
         <p
@@ -174,5 +177,13 @@ export function AtomCard({
       </div>
     </div>
   );
-}
+}, (prev, next) => {
+  return prev.atom.id === next.atom.id
+    && prev.atom.updated_at === next.atom.updated_at
+    && prev.atom.embedding_status === next.atom.embedding_status
+    && prev.atom.tagging_status === next.atom.tagging_status
+    && prev.atom.tags.length === next.atom.tags.length
+    && prev.viewMode === next.viewMode
+    && prev.matchingChunkContent === next.matchingChunkContent;
+});
 

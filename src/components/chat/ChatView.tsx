@@ -9,18 +9,16 @@ import { ChatInput } from './ChatInput';
 import { SearchBar } from '../ui/SearchBar';
 
 export function ChatView() {
-  const {
-    currentConversation,
-    messages,
-    isLoading,
-    isStreaming,
-    streamingContent,
-    error,
-    sendMessage,
-    goBack,
-  } = useChatStore();
+  const currentConversation = useChatStore(s => s.currentConversation);
+  const messages = useChatStore(s => s.messages);
+  const isLoading = useChatStore(s => s.isLoading);
+  const isStreaming = useChatStore(s => s.isStreaming);
+  const streamingContent = useChatStore(s => s.streamingContent);
+  const error = useChatStore(s => s.error);
+  const sendMessage = useChatStore(s => s.sendMessage);
+  const goBack = useChatStore(s => s.goBack);
 
-  const { openDrawer } = useUIStore();
+  const openDrawer = useUIStore(s => s.openDrawer);
 
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);

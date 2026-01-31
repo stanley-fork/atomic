@@ -9,7 +9,7 @@ use crate::models::{
 };
 use crate::providers::traits::LlmConfig;
 use crate::providers::types::{GenerationParams, Message, StructuredOutputSchema};
-use crate::providers::{create_llm_provider, ProviderConfig};
+use crate::providers::{get_llm_provider, ProviderConfig};
 use crate::search::{search_chunks, SearchMode, SearchOptions};
 use chrono::Utc;
 use regex::Regex;
@@ -373,7 +373,7 @@ async fn call_llm_for_wiki(
             )),
     );
 
-    let provider = create_llm_provider(provider_config).map_err(|e| e.to_string())?;
+    let provider = get_llm_provider(provider_config).map_err(|e| e.to_string())?;
 
     // Retry logic with exponential backoff
     let mut last_error = String::new();

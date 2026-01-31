@@ -1,3 +1,5 @@
+import { memo } from 'react';
+
 interface TagChipProps {
   name: string;
   onClick?: (e: React.MouseEvent) => void;
@@ -6,7 +8,7 @@ interface TagChipProps {
   className?: string;
 }
 
-export function TagChip({ name, onClick, onRemove, size = 'sm', className = '' }: TagChipProps) {
+export const TagChip = memo(function TagChip({ name, onClick, onRemove, size = 'sm', className = '' }: TagChipProps) {
   const sizeStyles = {
     sm: 'px-2 py-0.5 text-xs',
     md: 'px-2.5 py-1 text-sm',
@@ -36,5 +38,5 @@ export function TagChip({ name, onClick, onRemove, size = 'sm', className = '' }
       )}
     </span>
   );
-}
+});
 

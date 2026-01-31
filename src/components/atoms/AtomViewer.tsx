@@ -44,9 +44,13 @@ export function AtomViewer({ atom, onClose, onEdit, highlightText }: AtomViewerP
   const mountTimeRef = useRef(performance.now());
   const renderCountRef = useRef(0);
 
-  const { deleteAtom } = useAtomsStore();
-  const { fetchTags } = useTagsStore();
-  const { setSelectedTag, closeDrawer, openDrawer, openLocalGraph, locateOnCanvas } = useUIStore();
+  const deleteAtom = useAtomsStore(s => s.deleteAtom);
+  const fetchTags = useTagsStore(s => s.fetchTags);
+  const setSelectedTag = useUIStore(s => s.setSelectedTag);
+  const closeDrawer = useUIStore(s => s.closeDrawer);
+  const openDrawer = useUIStore(s => s.openDrawer);
+  const openLocalGraph = useUIStore(s => s.openLocalGraph);
+  const locateOnCanvas = useUIStore(s => s.locateOnCanvas);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [metadataExpanded, setMetadataExpanded] = useState(false);

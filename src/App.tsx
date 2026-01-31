@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { Layout } from './components/layout';
 import { LocalGraphView } from './components/canvas';
 import { useEmbeddingEvents } from './hooks';
@@ -7,11 +8,11 @@ function App() {
   // Initialize embedding event listener
   useEmbeddingEvents();
 
-  const { openDrawer } = useUIStore();
+  const openDrawer = useUIStore(s => s.openDrawer);
 
-  const handleAtomClick = (atomId: string) => {
+  const handleAtomClick = useCallback((atomId: string) => {
     openDrawer('viewer', atomId);
-  };
+  }, [openDrawer]);
 
   return (
     <>

@@ -73,6 +73,7 @@ interface AtomsStore {
   
   // New methods
   updateAtomStatus: (atomId: string, status: string) => void;
+  batchUpdateAtomStatuses: (updates: Array<{atomId: string, status: string}>) => void;
   addAtom: (atom: AtomWithTags) => void;
   search: (query: string) => Promise<void>;
   clearSemanticSearch: () => void;
@@ -170,6 +171,19 @@ export const useAtomsStore = create<AtomsStore>((set, get) => ({
           ? { ...a, embedding_status: status as Atom['embedding_status'] }
           : a
       ),
+    }));
+  },
+
+  batchUpdateAtomStatuses: (updates: Array<{atomId: string, status: string}>) => {
+    if (updates.length === 0) return;
+    const updateMap = new Map(updates.map(u => [u.atomId, u.status]));
+    set((state) => ({
+      atoms: state.atoms.map((a) => {
+        const newStatus = updateMap.get(a.id);
+        return newStatus
+          ? { ...a, embedding_status: newStatus as Atom['embedding_status'] }
+          : a;
+      }),
     }));
   },
 

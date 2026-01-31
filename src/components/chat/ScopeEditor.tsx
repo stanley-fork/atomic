@@ -81,8 +81,9 @@ interface FlatTag {
 export function ScopeEditor({ conversation }: ScopeEditorProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const { addTagToScope, removeTagFromScope } = useChatStore();
-  const { tags: allTags } = useTagsStore();
+  const addTagToScope = useChatStore(s => s.addTagToScope);
+  const removeTagFromScope = useChatStore(s => s.removeTagFromScope);
+  const allTags = useTagsStore(s => s.tags);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 

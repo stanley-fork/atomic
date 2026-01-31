@@ -4,7 +4,10 @@ import { WikiArticleCard } from './WikiArticleCard';
 import { NewWikiModal } from './NewWikiModal';
 
 export function WikiArticlesList() {
-  const { articles, isLoadingList, error, openArticle } = useWikiStore();
+  const articles = useWikiStore(s => s.articles);
+  const isLoadingList = useWikiStore(s => s.isLoadingList);
+  const error = useWikiStore(s => s.error);
+  const openArticle = useWikiStore(s => s.openArticle);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   if (isLoadingList && articles.length === 0) {

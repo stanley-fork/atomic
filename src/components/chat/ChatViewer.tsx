@@ -10,8 +10,12 @@ interface ChatViewerProps {
 }
 
 export function ChatViewer({ initialTagId, initialConversationId }: ChatViewerProps) {
-  const { view, showList, openConversation, openOrCreateForTag, reset } = useChatStore();
-  const { closeDrawer } = useUIStore();
+  const view = useChatStore(s => s.view);
+  const showList = useChatStore(s => s.showList);
+  const openConversation = useChatStore(s => s.openConversation);
+  const openOrCreateForTag = useChatStore(s => s.openOrCreateForTag);
+  const reset = useChatStore(s => s.reset);
+  const closeDrawer = useUIStore(s => s.closeDrawer);
   const initializedRef = useRef(false);
 
   // Initialize the chat view based on props - only run once

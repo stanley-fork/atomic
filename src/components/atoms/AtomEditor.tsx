@@ -20,9 +20,11 @@ interface AtomEditorProps {
 }
 
 export function AtomEditor({ atomId, onClose, onSaved }: AtomEditorProps) {
-  const { createAtom, updateAtom } = useAtomsStore();
-  const { fetchTags } = useTagsStore();
-  const { settings, fetchSettings } = useSettingsStore();
+  const createAtom = useAtomsStore(s => s.createAtom);
+  const updateAtom = useAtomsStore(s => s.updateAtom);
+  const fetchTags = useTagsStore(s => s.fetchTags);
+  const settings = useSettingsStore(s => s.settings);
+  const fetchSettings = useSettingsStore(s => s.fetchSettings);
   const theme = useTheme();
 
   const [content, setContent] = useState('');

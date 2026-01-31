@@ -32,14 +32,12 @@ const SEARCH_MODE_CONFIG: Record<SearchMode, { label: string; placeholder: strin
 };
 
 export function SemanticSearch() {
-  const {
-    semanticSearchQuery,
-    search,
-    clearSemanticSearch,
-    isSearching,
-    searchMode,
-    setSearchMode,
-  } = useAtomsStore();
+  const semanticSearchQuery = useAtomsStore(s => s.semanticSearchQuery);
+  const search = useAtomsStore(s => s.search);
+  const clearSemanticSearch = useAtomsStore(s => s.clearSemanticSearch);
+  const isSearching = useAtomsStore(s => s.isSearching);
+  const searchMode = useAtomsStore(s => s.searchMode);
+  const setSearchMode = useAtomsStore(s => s.setSearchMode);
 
   const [inputValue, setInputValue] = useState(semanticSearchQuery);
   const [showModeDropdown, setShowModeDropdown] = useState(false);

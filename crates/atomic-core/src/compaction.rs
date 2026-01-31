@@ -4,7 +4,7 @@
 
 use crate::providers::traits::LlmConfig;
 use crate::providers::types::{GenerationParams, Message, StructuredOutputSchema};
-use crate::providers::{create_llm_provider, ProviderConfig};
+use crate::providers::{get_llm_provider, ProviderConfig};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -197,7 +197,7 @@ async fn get_merge_suggestions(
     }
 
     let llm_config = LlmConfig::new(model).with_params(params);
-    let provider = create_llm_provider(provider_config).map_err(|e| e.to_string())?;
+    let provider = get_llm_provider(provider_config).map_err(|e| e.to_string())?;
 
     let mut last_error = String::new();
     for attempt in 0..3 {

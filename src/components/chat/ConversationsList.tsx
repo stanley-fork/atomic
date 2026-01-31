@@ -4,15 +4,13 @@ import { ConversationCard } from './ConversationCard';
 import { Modal } from '../ui/Modal';
 
 export function ConversationsList() {
-  const {
-    conversations,
-    isLoading,
-    error,
-    listFilterTagId,
-    createConversation,
-    openConversation,
-    deleteConversation,
-  } = useChatStore();
+  const conversations = useChatStore(s => s.conversations);
+  const isLoading = useChatStore(s => s.isLoading);
+  const error = useChatStore(s => s.error);
+  const listFilterTagId = useChatStore(s => s.listFilterTagId);
+  const createConversation = useChatStore(s => s.createConversation);
+  const openConversation = useChatStore(s => s.openConversation);
+  const deleteConversation = useChatStore(s => s.deleteConversation);
 
   const [deleteTarget, setDeleteTarget] = useState<ConversationWithTags | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);

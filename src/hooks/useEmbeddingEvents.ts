@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useAtomsStore } from '../stores/atoms';
 import { useTagsStore } from '../stores/tags';
@@ -27,7 +27,19 @@ interface EmbeddingsResetPayload {
   reason: string;
 }
 
+const DEBOUNCE_MS = 2000;
+const STATUS_BATCH_MS = 500;
+
 export function useEmbeddingEvents() {
+  // Batching refs for embedding status updates
+  const pendingStatusUpdates = useRef<Array<{atomId: string, status: string}>>([]);
+  const statusBatchTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  // Debounce refs for tag/atom refetches
+  const needsAtomRefresh = useRef(false);
+  const needsTagRefresh = useRef(false);
+  const refetchDebounceTimer = useRef<ReturnType<typeof setTimeout>>();
+
   // Setup event listeners once on mount
   // Use getState() inside callbacks to get latest store functions
   // This avoids re-registering listeners when store state changes
@@ -39,32 +51,55 @@ export function useEmbeddingEvents() {
     });
 
     // Listen for embedding-complete events (fast, embedding only)
+    // Batch these: collect status updates and flush every STATUS_BATCH_MS
     const unlistenEmbeddingComplete = listen<EmbeddingCompletePayload>('embedding-complete', (event) => {
-      console.log('Embedding complete event:', event.payload);
-      useAtomsStore.getState().updateAtomStatus(event.payload.atom_id, event.payload.status);
+      pendingStatusUpdates.current.push({
+        atomId: event.payload.atom_id,
+        status: event.payload.status,
+      });
+
+      clearTimeout(statusBatchTimer.current);
+      statusBatchTimer.current = setTimeout(() => {
+        const updates = pendingStatusUpdates.current;
+        if (updates.length > 0) {
+          pendingStatusUpdates.current = [];
+          useAtomsStore.getState().batchUpdateAtomStatuses(updates);
+        }
+      }, STATUS_BATCH_MS);
     });
 
     // Listen for tagging-complete events (slower, has tag info)
+    // Debounce these: accumulate and do a single refetch after events settle
     const unlistenTaggingComplete = listen<TaggingCompletePayload>('tagging-complete', (event) => {
-      console.log('Tagging complete event:', event.payload);
-
-      const { addLoadingOperation, removeLoadingOperation } = useUIStore.getState();
-
-      // If new tags were created, refresh the tag tree
+      // If new tags were created, we need to refresh the tag tree
       if (event.payload.new_tags_created && event.payload.new_tags_created.length > 0) {
-        console.log('New tags created:', event.payload.new_tags_created);
-        const opId = `fetch-tags-${Date.now()}`;
-        addLoadingOperation(opId, 'Refreshing tags...');
-        useTagsStore.getState().fetchTags().finally(() => removeLoadingOperation(opId));
+        needsTagRefresh.current = true;
       }
 
-      // If tags were extracted, refresh atoms to show updated tags
+      // If tags were extracted, we need to refresh atoms to show updated tags
       if (event.payload.tags_extracted && event.payload.tags_extracted.length > 0) {
-        console.log('Tags extracted:', event.payload.tags_extracted);
-        const opId = `fetch-atoms-${Date.now()}`;
-        addLoadingOperation(opId, 'Updating atoms...');
-        useAtomsStore.getState().fetchAtoms().finally(() => removeLoadingOperation(opId));
+        needsAtomRefresh.current = true;
       }
+
+      // Reset debounce timer — wait for events to settle before fetching
+      clearTimeout(refetchDebounceTimer.current);
+      refetchDebounceTimer.current = setTimeout(() => {
+        const { addLoadingOperation, removeLoadingOperation } = useUIStore.getState();
+
+        if (needsAtomRefresh.current) {
+          needsAtomRefresh.current = false;
+          const opId = `fetch-atoms-${Date.now()}`;
+          addLoadingOperation(opId, 'Updating atoms...');
+          useAtomsStore.getState().fetchAtoms().finally(() => removeLoadingOperation(opId));
+        }
+
+        if (needsTagRefresh.current) {
+          needsTagRefresh.current = false;
+          const opId = `fetch-tags-${Date.now()}`;
+          addLoadingOperation(opId, 'Refreshing tags...');
+          useTagsStore.getState().fetchTags().finally(() => removeLoadingOperation(opId));
+        }
+      }, DEBOUNCE_MS);
     });
 
     // Listen for embeddings-reset events (provider/model change triggers re-embedding)
@@ -78,6 +113,8 @@ export function useEmbeddingEvents() {
     });
 
     return () => {
+      clearTimeout(statusBatchTimer.current);
+      clearTimeout(refetchDebounceTimer.current);
       unlistenAtomCreated.then(fn => fn());
       unlistenEmbeddingComplete.then(fn => fn());
       unlistenTaggingComplete.then(fn => fn());

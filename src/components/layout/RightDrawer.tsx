@@ -22,7 +22,9 @@ const perfLog = (label: string, startTime?: number) => {
 };
 
 export function RightDrawer() {
-  const { drawerState, closeDrawer, openDrawer } = useUIStore();
+  const drawerState = useUIStore(s => s.drawerState);
+  const closeDrawer = useUIStore(s => s.closeDrawer);
+  const openDrawer = useUIStore(s => s.openDrawer);
   const drawerRef = useRef<HTMLDivElement>(null);
   const openTimeRef = useRef<number | null>(null);
 

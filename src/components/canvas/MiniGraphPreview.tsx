@@ -15,7 +15,7 @@ interface MiniGraphPreviewProps {
 }
 
 export function MiniGraphPreview({ atomId, onExpand }: MiniGraphPreviewProps) {
-  const { openLocalGraph } = useUIStore();
+  const openLocalGraph = useUIStore(s => s.openLocalGraph);
   const [graph, setGraph] = useState<NeighborhoodGraph | null>(null);
   const [nodes, setNodes] = useState<SimulationNode[]>([]);
   const [isLoading, setIsLoading] = useState(true);

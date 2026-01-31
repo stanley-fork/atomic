@@ -1,20 +1,35 @@
-import { useMemo } from 'react';
+import { useMemo, useCallback, useDeferredValue } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { AtomGrid } from '../atoms/AtomGrid';
 import { AtomList } from '../atoms/AtomList';
 import { CanvasView } from '../canvas/CanvasView';
 import { FAB } from '../ui/FAB';
-import { useAtomsStore, SemanticSearchResult } from '../../stores/atoms';
+import { useAtomsStore } from '../../stores/atoms';
 import { useUIStore } from '../../stores/ui';
 
 export function MainView() {
-  const {
-    atoms,
-    semanticSearchResults,
-    semanticSearchQuery,
-    searchMode,
-    retryEmbedding,
-  } = useAtomsStore();
-  const { viewMode, setViewMode, searchQuery, selectedTagId, openDrawer, openChatDrawer, openWikiListDrawer, openCommandPalette, highlightedAtomId, setHighlightedAtom } = useUIStore();
+  const atoms = useAtomsStore(s => s.atoms);
+  const semanticSearchResults = useAtomsStore(s => s.semanticSearchResults);
+  const semanticSearchQuery = useAtomsStore(s => s.semanticSearchQuery);
+  const retryEmbedding = useAtomsStore(s => s.retryEmbedding);
+
+  const { viewMode, searchQuery, selectedTagId, highlightedAtomId } = useUIStore(
+    useShallow(s => ({
+      viewMode: s.viewMode,
+      searchQuery: s.searchQuery,
+      selectedTagId: s.selectedTagId,
+      highlightedAtomId: s.highlightedAtomId,
+    }))
+  );
+  const setViewMode = useUIStore(s => s.setViewMode);
+  const openDrawer = useUIStore(s => s.openDrawer);
+  const openChatDrawer = useUIStore(s => s.openChatDrawer);
+  const openWikiListDrawer = useUIStore(s => s.openWikiListDrawer);
+  const openCommandPalette = useUIStore(s => s.openCommandPalette);
+  const setHighlightedAtom = useUIStore(s => s.setHighlightedAtom);
+
+  // Defer search query to keep input responsive while filtering 30k atoms
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   // Determine what to display
   const displayAtoms = useMemo(() => {
@@ -24,14 +39,14 @@ export function MainView() {
     }
 
     // Otherwise, filter by text search
-    if (!searchQuery.trim()) return atoms;
-    const query = searchQuery.toLowerCase();
+    if (!deferredSearchQuery.trim()) return atoms;
+    const query = deferredSearchQuery.toLowerCase();
     return atoms.filter(
       (atom) =>
         atom.content.toLowerCase().includes(query) ||
         atom.tags.some((tag) => tag.name.toLowerCase().includes(query))
     );
-  }, [atoms, searchQuery, semanticSearchResults]);
+  }, [atoms, deferredSearchQuery, semanticSearchResults]);
 
   // Check if we're showing semantic search results
   const isSemanticSearch = semanticSearchResults !== null;
@@ -42,59 +57,70 @@ export function MainView() {
     return semanticSearchResults.map((r) => r.id);
   }, [isSemanticSearch, semanticSearchResults]);
 
-  // Get matching chunk content for semantic search results
-  const getMatchingChunkContent = (atomId: string): string | undefined => {
-    if (!isSemanticSearch) return undefined;
-    const result = semanticSearchResults.find((r) => r.id === atomId) as
-      | SemanticSearchResult
-      | undefined;
-    return result?.matching_chunk_content;
-  };
+  // Build lookup map for matching chunk content (avoids .find() per atom)
+  const matchingChunkMap = useMemo(() => {
+    if (!isSemanticSearch) return null;
+    const map = new Map<string, string>();
+    for (const r of semanticSearchResults) {
+      if (r.matching_chunk_content) {
+        map.set(r.id, r.matching_chunk_content);
+      }
+    }
+    return map;
+  }, [isSemanticSearch, semanticSearchResults]);
 
-  const handleAtomClick = (atomId: string) => {
+  const getMatchingChunkContent = useCallback((atomId: string): string | undefined => {
+    return matchingChunkMap?.get(atomId);
+  }, [matchingChunkMap]);
+
+  const handleAtomClick = useCallback((atomId: string) => {
     // Pass highlight text based on search mode:
     // - Keyword: highlight the search query terms
     // - Semantic: highlight the matching chunk content
     // - Hybrid: highlight the search query (prioritize keywords over chunk)
+    const isSearch = useAtomsStore.getState().semanticSearchResults !== null;
+    if (!isSearch) {
+      openDrawer('viewer', atomId);
+      return;
+    }
+    const mode = useAtomsStore.getState().searchMode;
+    const query = useAtomsStore.getState().semanticSearchQuery;
     let highlightText: string | undefined;
-    if (isSemanticSearch) {
-      if (searchMode === 'keyword' || searchMode === 'hybrid') {
-        // For keyword/hybrid, highlight the actual search terms
-        highlightText = semanticSearchQuery;
-      } else {
-        // For semantic, highlight the matching chunk
-        highlightText = getMatchingChunkContent(atomId);
-      }
+    if (mode === 'keyword' || mode === 'hybrid') {
+      highlightText = query;
+    } else {
+      highlightText = matchingChunkMap?.get(atomId);
     }
     openDrawer('viewer', atomId, highlightText);
-  };
+  }, [openDrawer, matchingChunkMap]);
 
-  const handleNewAtom = () => {
+  const handleNewAtom = useCallback(() => {
     openDrawer('editor');
-  };
+  }, [openDrawer]);
 
-  const handleRetryEmbedding = async (atomId: string) => {
+  const handleRetryEmbedding = useCallback(async (atomId: string) => {
     try {
       await retryEmbedding(atomId);
     } catch (error) {
       console.error('Failed to retry embedding:', error);
     }
-  };
+  }, [retryEmbedding]);
 
-  const handleOpenChat = () => {
-    // Open chat list without pre-selecting a tag
-    // (Tag-specific chat is opened via the chat icon next to each tag)
+  const handleOpenChat = useCallback(() => {
     openChatDrawer();
-  };
+  }, [openChatDrawer]);
 
-  const handleOpenWiki = () => {
-    // Open wiki list
+  const handleOpenWiki = useCallback(() => {
     openWikiListDrawer();
-  };
+  }, [openWikiListDrawer]);
 
-  const handleOpenSearch = () => {
+  const handleOpenSearch = useCallback(() => {
     openCommandPalette('/');
-  };
+  }, [openCommandPalette]);
+
+  const handleHighlightClear = useCallback(() => {
+    setHighlightedAtom(null);
+  }, [setHighlightedAtom]);
 
   return (
     <main className="flex-1 flex flex-col h-full bg-[var(--color-bg-main)] overflow-hidden">
@@ -221,26 +247,22 @@ export function MainView() {
             searchResultIds={searchResultIds}
             highlightedAtomId={highlightedAtomId}
             onAtomClick={handleAtomClick}
-            onHighlightClear={() => setHighlightedAtom(null)}
+            onHighlightClear={handleHighlightClear}
           />
         ) : viewMode === 'grid' ? (
-          <div className="h-full overflow-y-auto">
-            <AtomGrid
-              atoms={displayAtoms}
-              onAtomClick={handleAtomClick}
-              getMatchingChunkContent={isSemanticSearch ? getMatchingChunkContent : undefined}
-              onRetryEmbedding={handleRetryEmbedding}
-            />
-          </div>
+          <AtomGrid
+            atoms={displayAtoms}
+            onAtomClick={handleAtomClick}
+            getMatchingChunkContent={isSemanticSearch ? getMatchingChunkContent : undefined}
+            onRetryEmbedding={handleRetryEmbedding}
+          />
         ) : (
-          <div className="h-full overflow-y-auto">
-            <AtomList
-              atoms={displayAtoms}
-              onAtomClick={handleAtomClick}
-              getMatchingChunkContent={isSemanticSearch ? getMatchingChunkContent : undefined}
-              onRetryEmbedding={handleRetryEmbedding}
-            />
-          </div>
+          <AtomList
+            atoms={displayAtoms}
+            onAtomClick={handleAtomClick}
+            getMatchingChunkContent={isSemanticSearch ? getMatchingChunkContent : undefined}
+            onRetryEmbedding={handleRetryEmbedding}
+          />
         )}
       </div>
 

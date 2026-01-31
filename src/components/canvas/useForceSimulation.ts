@@ -77,6 +77,25 @@ export function useForceSimulation({
       return;
     }
 
+    // For very large datasets, skip simulation and use random positions
+    if (atomsWithoutPositions.length > 5000) {
+      console.warn(`Skipping force simulation for ${atomsWithoutPositions.length} new atoms (too many). Assigning random positions.`);
+      const initialNodes: SimulationNode[] = atoms.map((atom) => {
+        const existingPos = existingPositions.get(atom.id);
+        return {
+          id: atom.id,
+          atom,
+          x: existingPos?.x ?? CANVAS_CENTER + (Math.random() - 0.5) * 2000,
+          y: existingPos?.y ?? CANVAS_CENTER + (Math.random() - 0.5) * 2000,
+        };
+      });
+      setNodes(initialNodes);
+      if (onSimulationEndRef.current) {
+        onSimulationEndRef.current(initialNodes);
+      }
+      return;
+    }
+
     // Need to run simulation
     setIsSimulating(true);
 
@@ -166,26 +185,49 @@ export function useForceSimulation({
   return { nodes, isSimulating };
 }
 
-// Helper to build connections from atoms
+// Helper to build connections from atoms using an inverted index.
+// Previous O(n^2) nested loop replaced with tag-based grouping.
 export function buildConnections(atoms: AtomWithTags[]): Connection[] {
-  const connections: Connection[] = [];
-
+  // Build inverted index: tagId -> list of atom indices
+  const tagToAtoms = new Map<string, number[]>();
   for (let i = 0; i < atoms.length; i++) {
-    const tagsA = new Set(atoms[i].tags.map((t) => t.id));
+    for (const tag of atoms[i].tags) {
+      let list = tagToAtoms.get(tag.id);
+      if (!list) {
+        list = [];
+        tagToAtoms.set(tag.id, list);
+      }
+      list.push(i);
+    }
+  }
 
-    for (let j = i + 1; j < atoms.length; j++) {
-      const sharedCount = atoms[j].tags.filter((t) => tagsA.has(t.id)).length;
-
-      if (sharedCount >= 2) {
-        connections.push({
-          sourceId: atoms[i].id,
-          targetId: atoms[j].id,
-          sharedTagCount: sharedCount,
-        });
+  // For each tag, count shared tags between each pair of atoms.
+  // Skip tags with too many atoms to avoid combinatorial explosion.
+  const pairCounts = new Map<string, number>();
+  for (const atomIndices of tagToAtoms.values()) {
+    if (atomIndices.length > 500) continue;
+    for (let a = 0; a < atomIndices.length; a++) {
+      for (let b = a + 1; b < atomIndices.length; b++) {
+        const i = atomIndices[a];
+        const j = atomIndices[b];
+        const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+        pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
       }
     }
   }
 
+  // Emit connections for pairs sharing 2+ tags
+  const connections: Connection[] = [];
+  for (const [key, count] of pairCounts) {
+    if (count >= 2) {
+      const [i, j] = key.split('-').map(Number);
+      connections.push({
+        sourceId: atoms[i].id,
+        targetId: atoms[j].id,
+        sharedTagCount: count,
+      });
+    }
+  }
   return connections;
 }
 

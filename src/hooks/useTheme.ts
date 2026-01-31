@@ -9,7 +9,7 @@ export const THEMES: { value: Theme; label: string }[] = [
 ];
 
 export function useTheme() {
-  const { settings } = useSettingsStore();
+  const settings = useSettingsStore(s => s.settings);
   const theme = (settings.theme as Theme) || 'obsidian';
 
   useEffect(() => {

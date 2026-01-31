@@ -4,9 +4,10 @@
 
 use crate::providers::traits::LlmConfig;
 use crate::providers::types::{GenerationParams, Message, StructuredOutputSchema};
-use crate::providers::{create_llm_provider, ProviderConfig};
+use crate::providers::{get_llm_provider, ProviderConfig};
 use rusqlite::Connection;
 use serde::Deserialize;
+use std::sync::{LazyLock, Mutex};
 
 // Extraction result types
 #[derive(Debug, Clone, Deserialize)]
@@ -30,6 +31,46 @@ pub struct TagConsolidationResult {
 pub struct TagLookupResult {
     pub found_ids: Vec<String>,
     pub missing_names: Vec<String>,
+}
+
+// ==================== Tag Tree Cache ====================
+
+/// Cached tag tree to avoid re-querying the DB for every atom during bulk processing.
+/// Refreshes every 30 seconds or when explicitly invalidated.
+struct TagTreeCache {
+    tree_json: String,
+    fetched_at: std::time::Instant,
+}
+
+const TAG_TREE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+static TAG_TREE_CACHE: LazyLock<Mutex<Option<TagTreeCache>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Get the tag tree JSON, using a time-based cache to avoid redundant DB queries.
+/// Falls back to a fresh query if the cache is stale or missing.
+pub fn get_tag_tree_cached(conn: &Connection) -> Result<String, String> {
+    let now = std::time::Instant::now();
+
+    // Check cache
+    if let Ok(cache) = TAG_TREE_CACHE.lock() {
+        if let Some(ref entry) = *cache {
+            if now.duration_since(entry.fetched_at) < TAG_TREE_CACHE_TTL {
+                return Ok(entry.tree_json.clone());
+            }
+        }
+    }
+
+    // Cache miss or stale — fetch fresh
+    let tree_json = get_tag_tree_for_llm(conn)?;
+
+    if let Ok(mut cache) = TAG_TREE_CACHE.lock() {
+        *cache = Some(TagTreeCache {
+            tree_json: tree_json.clone(),
+            fetched_at: now,
+        });
+    }
+
+    Ok(tree_json)
 }
 
 const TAG_CONSOLIDATION_PROMPT: &str = r#"You are reviewing tags applied to a complete document to consolidate overly specific tags into broader ones.
@@ -82,6 +123,115 @@ Guidelines:
 - Create new Level 2 tags under existing categories when needed
 - Prefer broad tags like "John Smith" rather than overly specific tags such as "Early Life of John Smith"
 - Every tag must have a valid parent_name from the top-level categories"#;
+
+/// Maximum characters to send for tagging (~30K tokens ≈ 120K chars)
+const MAX_TAGGING_CHARS: usize = 120_000;
+
+/// Extract tags from full atom content using a single LLM call.
+/// This replaces the per-chunk approach — the LLM sees the complete content
+/// and produces all tags in one pass, eliminating the need for consolidation.
+/// If content exceeds ~30K tokens, it is truncated to fit the context window.
+pub async fn extract_tags_from_content(
+    provider_config: &ProviderConfig,
+    content: &str,
+    tag_tree_json: &str,
+    model: &str,
+    supported_params: Option<Vec<String>>,
+) -> Result<ExtractionResult, String> {
+    // Truncate if content exceeds context window limit
+    let text = if content.len() > MAX_TAGGING_CHARS {
+        &content[..MAX_TAGGING_CHARS]
+    } else {
+        content
+    };
+
+    let user_content = format!(
+        "EXISTING TAG HIERARCHY:\n{}\n\nTEXT TO ANALYZE:\n{}",
+        tag_tree_json, text
+    );
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "tags": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the tag to apply"
+                        },
+                        "parent_name": {
+                            "type": ["string", "null"],
+                            "description": "Name of parent tag, or null for top-level categories"
+                        }
+                    },
+                    "required": ["name", "parent_name"],
+                    "additionalProperties": false
+                },
+                "description": "Tags to apply to this text"
+            }
+        },
+        "required": ["tags"],
+        "additionalProperties": false
+    });
+
+    let messages = vec![Message::system(SYSTEM_PROMPT), Message::user(user_content)];
+
+    let mut params = GenerationParams::new()
+        .with_temperature(0.1)
+        .with_structured_output(StructuredOutputSchema::new("extraction_result", schema))
+        .with_minimize_reasoning(true);
+
+    if let Some(supported) = supported_params {
+        params = params.with_supported_parameters(supported);
+    }
+
+    let llm_config = LlmConfig::new(model).with_params(params);
+
+    let provider = get_llm_provider(provider_config).map_err(|e| e.to_string())?;
+
+    // Retry logic with exponential backoff
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+        }
+
+        match provider.complete(&messages, &llm_config).await {
+            Ok(response) => {
+                let response_content = &response.content;
+                if !response_content.is_empty() {
+                    eprintln!("=== TAG EXTRACTION LLM OUTPUT ===");
+                    eprintln!("{}", response_content);
+                    eprintln!("=================================");
+
+                    let result: ExtractionResult = serde_json::from_str(response_content).map_err(|e| {
+                        format!(
+                            "Failed to parse extraction result: {} - Content: {}",
+                            e, response_content
+                        )
+                    })?;
+                    return Ok(result);
+                }
+                return Err("No content in response".to_string());
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if e.is_retryable() {
+                    last_error = err_str;
+                    continue;
+                } else {
+                    last_error = err_str;
+                    break;
+                }
+            }
+        }
+    }
+
+    Err(last_error)
+}
 
 /// Extract tags from a single chunk using LLM provider
 pub async fn extract_tags_from_chunk(
@@ -136,7 +286,7 @@ pub async fn extract_tags_from_chunk(
 
     let llm_config = LlmConfig::new(model).with_params(params);
 
-    let provider = create_llm_provider(provider_config).map_err(|e| e.to_string())?;
+    let provider = get_llm_provider(provider_config).map_err(|e| e.to_string())?;
 
     // Retry logic with exponential backoff
     let mut last_error = String::new();
@@ -505,7 +655,7 @@ pub async fn consolidate_atom_tags(
 
     let llm_config = LlmConfig::new(model).with_params(params);
 
-    let provider = create_llm_provider(provider_config).map_err(|e| e.to_string())?;
+    let provider = get_llm_provider(provider_config).map_err(|e| e.to_string())?;
 
     // Retry logic with exponential backoff
     let mut last_error = String::new();

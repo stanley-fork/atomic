@@ -9,9 +9,15 @@ import { useUIStore } from '../../stores/ui';
 import { useAtomsStore } from '../../stores/atoms';
 
 export function TagTree() {
-  const { tags, createTag, updateTag, deleteTag } = useTagsStore();
-  const { selectedTagId, setSelectedTag, openCommandPalette } = useUIStore();
-  const { fetchAtoms, fetchAtomsByTag } = useAtomsStore();
+  const tags = useTagsStore(s => s.tags);
+  const createTag = useTagsStore(s => s.createTag);
+  const updateTag = useTagsStore(s => s.updateTag);
+  const deleteTag = useTagsStore(s => s.deleteTag);
+  const selectedTagId = useUIStore(s => s.selectedTagId);
+  const setSelectedTag = useUIStore(s => s.setSelectedTag);
+  const openCommandPalette = useUIStore(s => s.openCommandPalette);
+  const fetchAtoms = useAtomsStore(s => s.fetchAtoms);
+  const fetchAtomsByTag = useAtomsStore(s => s.fetchAtomsByTag);
 
   const [contextMenu, setContextMenu] = useState<{
     position: { x: number; y: number } | null;

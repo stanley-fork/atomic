@@ -1,3 +1,5 @@
+import { memo, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { AtomWithTags } from '../../stores/atoms';
 import { AtomCard } from './AtomCard';
 
@@ -8,15 +10,25 @@ interface AtomListProps {
   onRetryEmbedding?: (atomId: string) => void;
 }
 
-export function AtomList({
+export const AtomList = memo(function AtomList({
   atoms,
   onAtomClick,
   getMatchingChunkContent,
   onRetryEmbedding,
 }: AtomListProps) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: atoms.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 76,
+    overscan: 10,
+    gap: 8,
+  });
+
   if (atoms.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-center p-8">
+      <div ref={parentRef} className="flex flex-col items-center justify-center h-full text-center p-8">
         <svg
           className="w-16 h-16 text-[var(--color-border)] mb-4"
           fill="none"
@@ -39,18 +51,34 @@ export function AtomList({
   }
 
   return (
-    <div className="flex flex-col gap-2 p-4">
-      {atoms.map((atom) => (
-        <AtomCard
-          key={atom.id}
-          atom={atom}
-          onClick={() => onAtomClick(atom.id)}
-          viewMode="list"
-          matchingChunkContent={getMatchingChunkContent?.(atom.id)}
-          onRetryEmbedding={onRetryEmbedding ? () => onRetryEmbedding(atom.id) : undefined}
-        />
-      ))}
+    <div ref={parentRef} className="h-full overflow-y-auto">
+      <div
+        className="relative w-full px-4 pt-4"
+        style={{ height: `${virtualizer.getTotalSize() + 16}px` }}
+      >
+        {virtualizer.getVirtualItems().map((virtualItem) => {
+          const atom = atoms[virtualItem.index];
+          return (
+            <div
+              key={atom.id}
+              className="absolute left-4 right-4"
+              style={{
+                top: `${virtualItem.start}px`,
+              }}
+              ref={virtualizer.measureElement}
+              data-index={virtualItem.index}
+            >
+              <AtomCard
+                atom={atom}
+                onAtomClick={onAtomClick}
+                viewMode="list"
+                matchingChunkContent={getMatchingChunkContent?.(atom.id)}
+                onRetryEmbedding={onRetryEmbedding}
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
-}
-
+});

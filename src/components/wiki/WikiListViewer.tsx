@@ -8,25 +8,24 @@ import { WikiGenerating } from './WikiGenerating';
 import { WikiArticleContent } from './WikiArticleContent';
 
 export function WikiListViewer() {
-  const {
-    view,
-    currentTagId,
-    currentTagName,
-    currentArticle,
-    articleStatus,
-    isLoading,
-    isGenerating,
-    isUpdating,
-    error,
-    fetchAllArticles,
-    goBack,
-    generateArticle,
-    updateArticle,
-    reset,
-    clearError,
-  } = useWikiStore();
+  const view = useWikiStore(s => s.view);
+  const currentTagId = useWikiStore(s => s.currentTagId);
+  const currentTagName = useWikiStore(s => s.currentTagName);
+  const currentArticle = useWikiStore(s => s.currentArticle);
+  const articleStatus = useWikiStore(s => s.articleStatus);
+  const isLoading = useWikiStore(s => s.isLoading);
+  const isGenerating = useWikiStore(s => s.isGenerating);
+  const isUpdating = useWikiStore(s => s.isUpdating);
+  const error = useWikiStore(s => s.error);
+  const fetchAllArticles = useWikiStore(s => s.fetchAllArticles);
+  const goBack = useWikiStore(s => s.goBack);
+  const generateArticle = useWikiStore(s => s.generateArticle);
+  const updateArticle = useWikiStore(s => s.updateArticle);
+  const reset = useWikiStore(s => s.reset);
+  const clearError = useWikiStore(s => s.clearError);
 
-  const { closeDrawer, openDrawer } = useUIStore();
+  const closeDrawer = useUIStore(s => s.closeDrawer);
+  const openDrawer = useUIStore(s => s.openDrawer);
   const initializedRef = useRef(false);
 
   // Initialize by fetching articles list

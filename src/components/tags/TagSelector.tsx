@@ -95,7 +95,8 @@ function HighlightedText({ text, matchIndices }: { text: string; matchIndices: n
 }
 
 export function TagSelector({ selectedTags, onTagsChange }: TagSelectorProps) {
-  const { tags, createTag } = useTagsStore();
+  const tags = useTagsStore(s => s.tags);
+  const createTag = useTagsStore(s => s.createTag);
   const [inputValue, setInputValue] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [showAllSelectedTags, setShowAllSelectedTags] = useState(false);

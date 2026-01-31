@@ -354,7 +354,10 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ isOpen, onClose, isSetupMode = false }: SettingsModalProps) {
-  const { settings, fetchSettings, setSetting, testOpenRouterConnection } = useSettingsStore();
+  const settings = useSettingsStore(s => s.settings);
+  const fetchSettings = useSettingsStore(s => s.fetchSettings);
+  const setSetting = useSettingsStore(s => s.setSetting);
+  const testOpenRouterConnection = useSettingsStore(s => s.testOpenRouterConnection);
 
   // Theme
   const [theme, setTheme] = useState<Theme>('obsidian');

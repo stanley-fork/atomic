@@ -9,7 +9,7 @@ pub mod traits;
 pub mod types;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 pub use error::ProviderError;
 pub use models::{fetch_and_return_capabilities, get_cached_capabilities_sync, save_capabilities_cache, AvailableModel};
@@ -18,7 +18,7 @@ pub use openrouter::OpenRouterProvider;
 pub use traits::{EmbeddingConfig, EmbeddingProvider, LlmConfig, LlmProvider, StreamingLlmProvider};
 
 /// Provider type enum
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderType {
     OpenRouter,
     Ollama,
@@ -34,7 +34,7 @@ impl ProviderType {
 }
 
 /// Provider configuration extracted from settings
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderConfig {
     pub provider_type: ProviderType,
     // OpenRouter settings
@@ -147,6 +147,121 @@ pub fn create_streaming_llm_provider(config: &ProviderConfig) -> Result<Arc<dyn 
             Ok(Arc::new(OllamaProvider::new(Some(config.ollama_host.clone()))))
         }
     }
+}
+
+// ==================== Provider Cache ====================
+
+/// Cached provider instances keyed on ProviderConfig.
+/// Avoids creating a new reqwest::Client per API call.
+struct ProviderCache {
+    embedding: Mutex<Option<(ProviderConfig, Arc<dyn EmbeddingProvider>)>>,
+    llm: Mutex<Option<(ProviderConfig, Arc<dyn LlmProvider>)>>,
+}
+
+static PROVIDER_CACHE: LazyLock<ProviderCache> = LazyLock::new(|| ProviderCache {
+    embedding: Mutex::new(None),
+    llm: Mutex::new(None),
+});
+
+/// Get or create a cached embedding provider.
+/// Returns the same Arc if config hasn't changed.
+pub fn get_embedding_provider(config: &ProviderConfig) -> Result<Arc<dyn EmbeddingProvider>, ProviderError> {
+    let mut cache = PROVIDER_CACHE.embedding.lock().map_err(|_| {
+        ProviderError::Configuration("Provider cache lock poisoned".to_string())
+    })?;
+
+    if let Some((ref cached_config, ref provider)) = *cache {
+        if cached_config == config {
+            return Ok(Arc::clone(provider));
+        }
+    }
+
+    let provider = create_embedding_provider(config)?;
+    *cache = Some((config.clone(), Arc::clone(&provider)));
+    Ok(provider)
+}
+
+/// Get or create a cached LLM provider.
+/// Returns the same Arc if config hasn't changed.
+pub fn get_llm_provider(config: &ProviderConfig) -> Result<Arc<dyn LlmProvider>, ProviderError> {
+    let mut cache = PROVIDER_CACHE.llm.lock().map_err(|_| {
+        ProviderError::Configuration("Provider cache lock poisoned".to_string())
+    })?;
+
+    if let Some((ref cached_config, ref provider)) = *cache {
+        if cached_config == config {
+            return Ok(Arc::clone(provider));
+        }
+    }
+
+    let provider = create_llm_provider(config)?;
+    *cache = Some((config.clone(), Arc::clone(&provider)));
+    Ok(provider)
+}
+
+// ==================== Model Capabilities Cache ====================
+
+/// In-memory cache for model capabilities to avoid repeated DB reads + API calls.
+struct CapabilitiesCache {
+    inner: Mutex<Option<models::ModelCapabilitiesCache>>,
+}
+
+static CAPABILITIES_CACHE: LazyLock<CapabilitiesCache> = LazyLock::new(|| CapabilitiesCache {
+    inner: Mutex::new(None),
+});
+
+/// Get cached model capabilities from memory, falling back to DB, then API.
+/// This avoids each concurrent task independently fetching capabilities.
+pub async fn get_model_capabilities(
+    db_conn_fn: impl Fn() -> Result<rusqlite::Connection, String>,
+) -> Option<models::ModelCapabilitiesCache> {
+    // Check in-memory cache first
+    {
+        let cache = CAPABILITIES_CACHE.inner.lock().ok()?;
+        if let Some(ref caps) = *cache {
+            if !caps.is_stale() {
+                return Some(caps.clone());
+            }
+        }
+    }
+
+    // Try DB cache
+    let db_cache = {
+        let conn = db_conn_fn().ok()?;
+        get_cached_capabilities_sync(&conn).ok().flatten()
+    };
+
+    let (cached, is_stale) = match db_cache {
+        Some(ref cache) => (Some(cache.clone()), cache.is_stale()),
+        None => (None, true),
+    };
+
+    let result = if is_stale {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        match fetch_and_return_capabilities(&client).await {
+            Ok(fresh) => {
+                // Save to DB
+                if let Ok(conn) = db_conn_fn() {
+                    let _ = save_capabilities_cache(&conn, &fresh);
+                }
+                fresh
+            }
+            Err(_) => cached.unwrap_or_default(),
+        }
+    } else {
+        cached.unwrap_or_default()
+    };
+
+    // Store in memory
+    if let Ok(mut cache) = CAPABILITIES_CACHE.inner.lock() {
+        *cache = Some(result.clone());
+    }
+
+    Some(result)
 }
 
 #[cfg(test)]

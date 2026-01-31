@@ -13,8 +13,8 @@ import { resetStuckProcessing, processPendingEmbeddings, processPendingTagging, 
 
 export function Layout() {
   useTheme(); // Initialize theme
-  const { fetchAtoms } = useAtomsStore();
-  const { fetchTags } = useTagsStore();
+  const fetchAtoms = useAtomsStore(s => s.fetchAtoms);
+  const fetchTags = useTagsStore(s => s.fetchTags);
   const [isSetupRequired, setIsSetupRequired] = useState<boolean | null>(null); // null = checking
   const [settingsOpen, setSettingsOpen] = useState(false);
 
