@@ -7,6 +7,7 @@ mod chat;
 mod clustering;
 mod embedding;
 mod graph;
+pub mod oauth;
 mod ollama;
 mod search;
 mod settings;

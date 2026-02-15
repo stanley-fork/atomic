@@ -7,6 +7,8 @@ mod auth;
 mod config;
 mod error;
 mod event_bridge;
+mod mcp;
+mod mcp_auth;
 mod routes;
 mod state;
 mod ws;
@@ -15,7 +17,11 @@ use actix_cors::Cors;
 use actix_web::{middleware, web, App, HttpResponse, HttpServer, Responder};
 use clap::Parser;
 use config::{Cli, Command, TokenAction};
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp_actix_web::transport::StreamableHttpService;
 use state::AppState;
+use std::sync::Arc;
+use std::time::Duration;
 
 async fn health() -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
@@ -40,8 +46,10 @@ async fn main() -> std::io::Result<()> {
         }
 
         // Server mode (default)
-        Some(Command::Serve { port, bind }) => run_server(core, &cli.db_path, port, &bind).await,
-        None => run_server(core, &cli.db_path, 8080, "127.0.0.1").await,
+        Some(Command::Serve { port, bind, public_url }) => {
+            run_server(core, &cli.db_path, port, &bind, public_url).await
+        }
+        None => run_server(core, &cli.db_path, 8080, "127.0.0.1", None).await,
     }
 }
 
@@ -109,6 +117,7 @@ async fn run_server(
     db_path: &str,
     port: u16,
     bind: &str,
+    public_url: Option<String>,
 ) -> std::io::Result<()> {
     // Migrate legacy token if present
     match core.migrate_legacy_token() {
@@ -136,13 +145,36 @@ async fn run_server(
     // Create broadcast channel for WebSocket events (buffer 256 events)
     let (event_tx, _) = tokio::sync::broadcast::channel(256);
 
-    let app_state = web::Data::new(AppState { core, event_tx });
+    let app_state = web::Data::new(AppState {
+        core: core.clone(),
+        event_tx: event_tx.clone(),
+        public_url: public_url.clone(),
+    });
+
+    // Create MCP service
+    let mcp_core = core.clone();
+    let mcp_tx = event_tx.clone();
+    let mcp_service = StreamableHttpService::builder()
+        .service_factory(Arc::new(move || {
+            Ok(mcp::AtomicMcpServer::new(
+                mcp_core.clone(),
+                mcp_tx.clone(),
+            ))
+        }))
+        .session_manager(Arc::new(LocalSessionManager::default()))
+        .stateful_mode(false)
+        .sse_keep_alive(Duration::from_secs(30))
+        .build();
 
     println!("Atomic Server starting...");
     println!("  Database: {}", db_path);
     println!("  Listening: http://{}:{}", bind, port);
+    if let Some(ref url) = public_url {
+        println!("  Public URL: {}", url);
+    }
     println!();
     println!("  Health: http://{}:{}/health", bind, port);
+    println!("  MCP: http://{}:{}/mcp", bind, port);
     println!(
         "  WebSocket: ws://{}:{}/ws?token=<token>",
         bind, port
@@ -183,6 +215,34 @@ async fn run_server(
             // Public routes (no auth)
             .route("/health", web::get().to(health))
             .route("/ws", web::get().to(ws::ws_handler))
+            // OAuth discovery (public, no auth)
+            .route(
+                "/.well-known/oauth-authorization-server",
+                web::get().to(routes::oauth::metadata),
+            )
+            .route(
+                "/.well-known/oauth-protected-resource",
+                web::get().to(routes::oauth::resource_metadata),
+            )
+            // OAuth flow (public, no auth)
+            .route("/oauth/register", web::post().to(routes::oauth::register))
+            .route(
+                "/oauth/authorize",
+                web::get().to(routes::oauth::authorize_page),
+            )
+            .route(
+                "/oauth/authorize",
+                web::post().to(routes::oauth::authorize_approve),
+            )
+            .route("/oauth/token", web::post().to(routes::oauth::token))
+            // MCP endpoint with MCP-aware auth
+            .service(
+                web::scope("/mcp")
+                    .wrap(mcp_auth::McpAuth {
+                        state: app_state.clone(),
+                    })
+                    .service(mcp_service.clone().scope()),
+            )
             // Authenticated API routes
             .service(
                 web::scope("/api")

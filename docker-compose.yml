@@ -3,6 +3,10 @@ services:
     build:
       context: .
       target: server
+    environment:
+      # Set to your domain to enable OAuth/MCP for Claude.ai:
+      # PUBLIC_URL: https://atomic.example.com
+      - PUBLIC_URL=${PUBLIC_URL:-}
     volumes:
       - atomic-data:/data
     networks:

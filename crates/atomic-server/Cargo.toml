@@ -27,7 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
@@ -38,6 +38,16 @@ reqwest = { version = "0.12", features = ["json"] }
 
 # Database (needed for direct SQL in some routes)
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# MCP server
+rmcp = { version = "0.10", features = ["server", "macros", "transport-streamable-http-server-session"] }
+rmcp-actix-web = "0.8"
+schemars = "1.0"
+
+# OAuth / crypto
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"

@@ -25,6 +25,12 @@ pub enum Command {
         /// Address to bind to
         #[arg(long, default_value = "127.0.0.1")]
         bind: String,
+
+        /// Public URL for OAuth discovery (e.g. https://atomic.example.com).
+        /// Required for OAuth/MCP remote auth. Without this, OAuth endpoints return 404.
+        /// Can also be set via PUBLIC_URL env var.
+        #[arg(long, env = "PUBLIC_URL")]
+        public_url: Option<String>,
     },
 
     /// Manage API tokens

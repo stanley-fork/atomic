@@ -113,7 +113,7 @@ mod tests {
         let core = atomic_core::AtomicCore::open_or_create(temp.path()).unwrap();
         let (info, raw_token) = core.create_api_token("test-token").unwrap();
         let (event_tx, _) = broadcast::channel(16);
-        let state = web::Data::new(AppState { core, event_tx });
+        let state = web::Data::new(AppState { core, event_tx, public_url: None });
         // Leak the tempfile so the DB stays alive during the test
         std::mem::forget(temp);
         let _ = info;

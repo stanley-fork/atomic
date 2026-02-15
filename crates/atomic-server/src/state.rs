@@ -8,6 +8,8 @@ use tokio::sync::broadcast;
 pub struct AppState {
     pub core: AtomicCore,
     pub event_tx: broadcast::Sender<ServerEvent>,
+    /// Public URL for OAuth discovery (set via --public-url CLI flag)
+    pub public_url: Option<String>,
 }
 
 /// Events broadcast to WebSocket clients
