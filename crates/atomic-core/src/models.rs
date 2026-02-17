@@ -157,6 +157,38 @@ pub struct WikiArticleSummary {
     pub tag_name: String,
     pub updated_at: String,
     pub atom_count: i32,
+    pub inbound_links: i32,
+}
+
+/// Inter-article wiki link (cross-reference between wiki articles)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WikiLink {
+    pub id: String,
+    pub source_article_id: String,
+    pub target_tag_name: String,
+    pub target_tag_id: Option<String>,
+    pub has_article: bool,
+}
+
+/// Tag related to another tag by semantic connectivity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedTag {
+    pub tag_id: String,
+    pub tag_name: String,
+    pub score: f64,
+    pub shared_atoms: i32,
+    pub semantic_edges: i32,
+    pub has_article: bool,
+}
+
+/// Suggested wiki article for tags that don't have articles yet
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestedArticle {
+    pub tag_id: String,
+    pub tag_name: String,
+    pub atom_count: i32,
+    pub mention_count: i32,
+    pub score: f64,
 }
 
 /// Chunk with context for wiki generation

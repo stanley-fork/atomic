@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, Fragment, ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { WikiArticle, WikiCitation } from '../../stores/wiki';
+import { WikiArticle, WikiArticleSummary, WikiCitation, WikiLink, RelatedTag, useWikiStore } from '../../stores/wiki';
 import { CitationLink } from './CitationLink';
 import { CitationPopover } from './CitationPopover';
+import { WikiLinkInline } from './WikiLinkInline';
 import { SearchBar } from '../ui/SearchBar';
 import { MarkdownImage } from '../ui/MarkdownImage';
 import { useContentSearch } from '../../hooks';
@@ -11,12 +12,17 @@ import { useContentSearch } from '../../hooks';
 interface WikiArticleContentProps {
   article: WikiArticle;
   citations: WikiCitation[];
+  wikiLinks: WikiLink[];
+  relatedTags: RelatedTag[];
+  allArticles: WikiArticleSummary[];
   onViewAtom: (atomId: string) => void;
+  onNavigateToArticle: (tagId: string, tagName: string) => void;
 }
 
-export function WikiArticleContent({ article, citations, onViewAtom }: WikiArticleContentProps) {
+export function WikiArticleContent({ article, citations, wikiLinks, relatedTags, allArticles, onViewAtom, onNavigateToArticle }: WikiArticleContentProps) {
   const [activeCitation, setActiveCitation] = useState<WikiCitation | null>(null);
   const [anchorRect, setAnchorRect] = useState<{ top: number; left: number; bottom: number; width: number } | null>(null);
+  const openAndGenerate = useWikiStore(s => s.openAndGenerate);
 
   // Content search
   const {
@@ -48,6 +54,28 @@ export function WikiArticleContent({ article, citations, onViewAtom }: WikiArtic
   // Create a map of citation index to citation object
   const citationMap = new Map(citations.map(c => [c.citation_index, c]));
 
+  // Create a map of wiki link name (lowercase) to wiki link object
+  const wikiLinkMap = new Map(wikiLinks.map(l => [l.target_tag_name.toLowerCase(), l]));
+
+  // Build implicit link detection: find plain-text mentions of known article names
+  const implicitLinkData = useMemo(() => {
+    if (allArticles.length === 0) return null;
+
+    // Exclude self (current article's tag) and names already in explicit wikiLinks
+    const explicitNames = new Set(wikiLinks.map(l => l.target_tag_name.toLowerCase()));
+    const candidates = allArticles
+      .filter(a => a.tag_id !== article.tag_id && !explicitNames.has(a.tag_name.toLowerCase()))
+      .sort((a, b) => b.tag_name.length - a.tag_name.length); // longest first
+
+    if (candidates.length === 0) return null;
+
+    const nameMap = new Map(candidates.map(a => [a.tag_name.toLowerCase(), a]));
+    // Escape regex special chars in names and build a single pattern
+    const escaped = candidates.map(a => a.tag_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi');
+    return { nameMap, pattern };
+  }, [allArticles, wikiLinks, article.tag_id]);
+
   const handleCitationClick = (citation: WikiCitation, element: HTMLElement) => {
     const rect = element.getBoundingClientRect();
     setActiveCitation(citation);
@@ -59,14 +87,60 @@ export function WikiArticleContent({ article, citations, onViewAtom }: WikiArtic
     setAnchorRect(null);
   };
 
-  // Process text to replace [N] patterns with CitationLink components
-  // Returns array of strings and CitationLink elements (strings for highlighting, elements for citations)
+  const handleWikiLinkClick = (link: WikiLink) => {
+    if (link.has_article && link.target_tag_id) {
+      onNavigateToArticle(link.target_tag_id, link.target_tag_name);
+    } else if (link.target_tag_id) {
+      openAndGenerate(link.target_tag_id, link.target_tag_name);
+    }
+  };
+
+  // Process plain text to detect implicit article name mentions
+  const processImplicitLinks = (text: string, keyPrefix: string): (string | JSX.Element)[] => {
+    if (!implicitLinkData) return [text];
+    const { nameMap, pattern } = implicitLinkData;
+    // Reset regex lastIndex for global regex
+    pattern.lastIndex = 0;
+    const result: (string | JSX.Element)[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        result.push(text.slice(lastIndex, match.index));
+      }
+      const matchedText = match[0];
+      const articleSummary = nameMap.get(matchedText.toLowerCase());
+      if (articleSummary) {
+        result.push(
+          <button
+            key={`implicit-${keyPrefix}-${match.index}`}
+            onClick={() => onNavigateToArticle(articleSummary.tag_id, articleSummary.tag_name)}
+            className="text-[var(--color-accent)]/70 hover:text-[var(--color-accent)] underline decoration-dotted decoration-[var(--color-accent)]/40 underline-offset-2 cursor-pointer bg-transparent border-none p-0 font-inherit text-inherit"
+            title={`Go to article: ${articleSummary.tag_name}`}
+          >
+            {matchedText}
+          </button>
+        );
+      } else {
+        result.push(matchedText);
+      }
+      lastIndex = pattern.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      result.push(text.slice(lastIndex));
+    }
+    return result;
+  };
+
+  // Process text to replace [N] citations and [[wiki links]] with interactive components
   const processTextWithCitations = (text: string): (string | JSX.Element)[] => {
-    const parts = text.split(/(\[\d+\])/g);
-    return parts.map((part, i) => {
-      const match = part.match(/\[(\d+)\]/);
-      if (match) {
-        const index = parseInt(match[1], 10);
+    // Split on both [N] citations and [[wiki links]]
+    const parts = text.split(/(\[\d+\]|\[\[[^\]]+\]\])/g);
+    const withCitationsAndLinks = parts.map((part, i) => {
+      // Check for citation [N]
+      const citationMatch = part.match(/^\[(\d+)\]$/);
+      if (citationMatch) {
+        const index = parseInt(citationMatch[1], 10);
         const citation = citationMap.get(index);
         if (citation) {
           return (
@@ -78,27 +152,60 @@ export function WikiArticleContent({ article, citations, onViewAtom }: WikiArtic
           );
         }
       }
+
+      // Check for wiki link [[Name]]
+      const wikiLinkMatch = part.match(/^\[\[([^\]]+)\]\]$/);
+      if (wikiLinkMatch) {
+        const linkName = wikiLinkMatch[1].trim();
+        const link = wikiLinkMap.get(linkName.toLowerCase());
+        if (link) {
+          return (
+            <WikiLinkInline
+              key={`wikilink-${i}-${linkName}`}
+              tagName={linkName}
+              hasArticle={link.has_article}
+              onClick={() => handleWikiLinkClick(link)}
+            />
+          );
+        }
+        // Unknown wiki link — render as plain text with dimmed style
+        return (
+          <span key={`wikilink-unknown-${i}`} className="text-[var(--color-text-tertiary)]" title="Unknown article">
+            {linkName}
+          </span>
+        );
+      }
+
       // Return raw string so highlighting can be applied
       return part;
     });
+
+    // Second pass: apply implicit link detection to remaining plain-text segments
+    if (!implicitLinkData) return withCitationsAndLinks;
+    const result: (string | JSX.Element)[] = [];
+    for (let i = 0; i < withCitationsAndLinks.length; i++) {
+      const part = withCitationsAndLinks[i];
+      if (typeof part === 'string' && part.length > 0) {
+        result.push(...processImplicitLinks(part, `${i}`));
+      } else {
+        result.push(part);
+      }
+    }
+    return result;
   };
 
-  // Process children recursively to handle citations and search highlighting in all text nodes
+  // Process children recursively to handle citations, wiki links, and search highlighting
   const processChildren = useCallback((children: ReactNode): ReactNode => {
     if (typeof children === 'string') {
-      // First process citations, then apply highlighting
       const withCitations = processTextWithCitations(children);
       if (isSearchOpen && searchQuery.trim()) {
-        // Apply highlighting to string parts, keep citation elements as-is
         return withCitations.map((part, i) => {
           if (typeof part === 'string') {
             return <Fragment key={`hl-${i}`}>{highlightChildren(part)}</Fragment>;
           }
-          // Citation link element - keep as is
           return part;
         });
       }
-      // No search - wrap strings in fragments for valid React output
       return withCitations.map((part, i) =>
         typeof part === 'string' ? <Fragment key={`t-${i}`}>{part}</Fragment> : part
       );
@@ -109,7 +216,7 @@ export function WikiArticleContent({ article, citations, onViewAtom }: WikiArtic
       ));
     }
     return children;
-  }, [isSearchOpen, searchQuery, highlightChildren]);
+  }, [isSearchOpen, searchQuery, highlightChildren, wikiLinks, citations, implicitLinkData]);
 
   // Custom components for react-markdown
   const components = {
@@ -197,6 +304,66 @@ export function WikiArticleContent({ article, citations, onViewAtom }: WikiArtic
             {article.content}
           </ReactMarkdown>
         </div>
+
+        {/* Related Articles section (tags with existing articles) */}
+        {relatedTags.some(t => t.has_article) && (
+          <div className="border-t border-[var(--color-border)] mt-2 pt-4 px-6 pb-4">
+            <h3 className="text-xs font-medium text-[var(--color-text-tertiary)] uppercase tracking-wider mb-3">
+              Related Articles
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {relatedTags.filter(t => t.has_article).map(tag => (
+                <button
+                  key={tag.tag_id}
+                  onClick={() => onNavigateToArticle(tag.tag_id, tag.tag_name)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors bg-[var(--color-accent)]/10 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20"
+                  title={`${tag.shared_atoms} shared atoms, ${tag.semantic_edges} semantic connections`}
+                >
+                  {tag.tag_name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Recommended articles to generate (related tags without articles) */}
+        {relatedTags.some(t => !t.has_article) && (
+          <div className="border-t border-[var(--color-border)] pt-4 px-6 pb-6">
+            <h3 className="text-xs font-medium text-[var(--color-text-tertiary)] uppercase tracking-wider mb-2">
+              Recommended
+            </h3>
+            <div className="divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)] overflow-hidden">
+              {relatedTags.filter(t => !t.has_article).map(tag => (
+                <button
+                  key={tag.tag_id}
+                  onClick={() => openAndGenerate(tag.tag_id, tag.tag_name)}
+                  className="w-full group flex items-center justify-between px-3 py-2 hover:bg-[var(--color-bg-elevated)] transition-colors text-left"
+                >
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm text-[var(--color-text-primary)]">
+                      {tag.tag_name}
+                    </span>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-[11px] text-[var(--color-text-tertiary)]">
+                        {tag.shared_atoms} shared atom{tag.shared_atoms !== 1 ? 's' : ''}
+                      </span>
+                      {tag.semantic_edges > 0 && (
+                        <span className="text-[11px] text-[var(--color-text-tertiary)]">
+                          {tag.semantic_edges} semantic link{tag.semantic_edges !== 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                    <svg className="w-4 h-4 text-[var(--color-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Citation popover */}
@@ -211,4 +378,3 @@ export function WikiArticleContent({ article, citations, onViewAtom }: WikiArtic
     </>
   );
 }
-

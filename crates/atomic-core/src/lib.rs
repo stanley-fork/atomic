@@ -829,8 +829,10 @@ impl AtomicCore {
         tag_id: &str,
         tag_name: &str,
     ) -> Result<WikiArticleWithCitations, AtomicCoreError> {
-        // Get settings for provider config
-        let (provider_config, wiki_model) = {
+        eprintln!("[wiki] === Generating article for '{}' (tag_id={}) ===", tag_name, tag_id);
+
+        // Get settings for provider config and existing article names for cross-linking
+        let (provider_config, wiki_model, existing_article_names) = {
             let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
             let settings_map = settings::get_all_settings(&conn)?;
             let config = ProviderConfig::from_settings(&settings_map);
@@ -838,26 +840,46 @@ impl AtomicCore {
                 .get("wiki_model")
                 .cloned()
                 .unwrap_or_else(|| "anthropic/claude-sonnet-4.5".to_string());
-            (config, model)
+            let article_names = wiki::get_existing_article_names(&conn)
+                .map_err(|e| AtomicCoreError::Wiki(e))?;
+            eprintln!("[wiki] Model: {}, existing articles for cross-linking: {}", model, article_names.len());
+            (config, model, article_names)
         };
 
         // Prepare sources using async function
+        eprintln!("[wiki] Preparing sources (hybrid search)...");
         let input = wiki::prepare_wiki_generation(&self.db, &provider_config, tag_id, tag_name)
             .await
             .map_err(|e| AtomicCoreError::Wiki(e))?;
+        eprintln!("[wiki] Found {} chunks from {} atoms", input.chunks.len(), input.atom_count);
 
-        // Generate content
-        let result = wiki::generate_wiki_content(&provider_config, &input, &wiki_model)
-            .await
-            .map_err(|e| AtomicCoreError::Wiki(e))?;
+        // Generate content with cross-linking context
+        eprintln!("[wiki] Calling LLM...");
+        let result = wiki::generate_wiki_content(
+            &provider_config,
+            &input,
+            &wiki_model,
+            &existing_article_names,
+        )
+        .await
+        .map_err(|e| AtomicCoreError::Wiki(e))?;
+
+        // Extract wiki links from generated content
+        let wiki_links = wiki::extract_wiki_links(
+            &result.article.id,
+            &result.article.content,
+            &existing_article_names,
+        );
+        eprintln!("[wiki] Extracted {} wiki links, {} citations", wiki_links.len(), result.citations.len());
 
         // Save to database
         {
             let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
-            wiki::save_wiki_article(&conn, &result.article, &result.citations)
+            wiki::save_wiki_article(&conn, &result.article, &result.citations, &wiki_links)
                 .map_err(|e| AtomicCoreError::Wiki(e))?;
         }
 
+        eprintln!("[wiki] === Article saved successfully ===");
         Ok(result)
     }
 
@@ -877,6 +899,18 @@ impl AtomicCore {
     pub fn delete_wiki(&self, tag_id: &str) -> Result<(), AtomicCoreError> {
         let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
         wiki::delete_article(&conn, tag_id).map_err(|e| AtomicCoreError::Wiki(e))
+    }
+
+    /// Get tags related to a given tag by semantic connectivity
+    pub fn get_related_tags(&self, tag_id: &str, limit: usize) -> Result<Vec<RelatedTag>, AtomicCoreError> {
+        let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
+        wiki::get_related_tags(&conn, tag_id, limit).map_err(|e| AtomicCoreError::Wiki(e))
+    }
+
+    /// Get wiki links (outgoing cross-references) for an article
+    pub fn get_wiki_links(&self, tag_id: &str) -> Result<Vec<WikiLink>, AtomicCoreError> {
+        let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
+        wiki::load_wiki_links(&conn, tag_id).map_err(|e| AtomicCoreError::Wiki(e))
     }
 
     // ==================== Embedding Management ====================
@@ -1688,6 +1722,39 @@ impl AtomicCore {
         }
 
         Ok(stats)
+    }
+
+    /// Get suggested wiki articles (tags without articles, ranked by demand)
+    pub fn get_suggested_wiki_articles(&self, limit: i32) -> Result<Vec<SuggestedArticle>, AtomicCoreError> {
+        let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
+        wiki::get_suggested_wiki_articles(&conn, limit).map_err(|e| AtomicCoreError::Wiki(e))
+    }
+
+    /// Recompute centroid embeddings for all tags that have atoms with embeddings.
+    /// Useful for backfilling after this feature is added to an existing database.
+    pub fn recompute_all_tag_embeddings(&self) -> Result<i32, AtomicCoreError> {
+        let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
+
+        // Get all tags that have at least one atom with embeddings
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT at.tag_id
+             FROM atom_tags at
+             INNER JOIN atom_chunks ac ON at.atom_id = ac.atom_id
+             WHERE ac.embedding IS NOT NULL",
+        )?;
+
+        let tag_ids: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let count = tag_ids.len() as i32;
+        eprintln!("Recomputing centroid embeddings for {} tags...", count);
+
+        embedding::compute_tag_embeddings_batch(&conn, &tag_ids)
+            .map_err(|e| AtomicCoreError::Embedding(e))?;
+
+        eprintln!("Tag centroid embeddings recomputed for {} tags", count);
+        Ok(count)
     }
 }
 

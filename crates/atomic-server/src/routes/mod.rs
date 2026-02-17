@@ -42,6 +42,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
     // Wiki
     cfg.route("/wiki", web::get().to(wiki::get_all_wiki_articles));
+    cfg.route("/wiki/suggestions", web::get().to(wiki::get_wiki_suggestions));
     cfg.route("/wiki/{tag_id}", web::get().to(wiki::get_wiki));
     cfg.route("/wiki/{tag_id}/status", web::get().to(wiki::get_wiki_status));
     cfg.route(
@@ -50,6 +51,18 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
     cfg.route("/wiki/{tag_id}/update", web::post().to(wiki::update_wiki));
     cfg.route("/wiki/{tag_id}", web::delete().to(wiki::delete_wiki));
+    cfg.route(
+        "/wiki/{tag_id}/related",
+        web::get().to(wiki::get_related_tags),
+    );
+    cfg.route(
+        "/wiki/{tag_id}/links",
+        web::get().to(wiki::get_wiki_links),
+    );
+    cfg.route(
+        "/wiki/recompute-tag-embeddings",
+        web::post().to(wiki::recompute_all_tag_embeddings),
+    );
 
     // Settings
     cfg.route("/settings", web::get().to(settings::get_settings));

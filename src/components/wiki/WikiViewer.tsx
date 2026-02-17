@@ -14,15 +14,22 @@ interface WikiViewerProps {
 export function WikiViewer({ tagId, tagName }: WikiViewerProps) {
   const currentArticle = useWikiStore(s => s.currentArticle);
   const articleStatus = useWikiStore(s => s.articleStatus);
+  const relatedTags = useWikiStore(s => s.relatedTags);
+  const wikiLinks = useWikiStore(s => s.wikiLinks);
+  const articles = useWikiStore(s => s.articles);
   const isLoading = useWikiStore(s => s.isLoading);
   const isGenerating = useWikiStore(s => s.isGenerating);
   const isUpdating = useWikiStore(s => s.isUpdating);
   const error = useWikiStore(s => s.error);
   const fetchArticle = useWikiStore(s => s.fetchArticle);
   const fetchArticleStatus = useWikiStore(s => s.fetchArticleStatus);
+  const fetchRelatedTags = useWikiStore(s => s.fetchRelatedTags);
+  const fetchWikiLinks = useWikiStore(s => s.fetchWikiLinks);
   const generateArticle = useWikiStore(s => s.generateArticle);
   const updateArticle = useWikiStore(s => s.updateArticle);
+  const openArticle = useWikiStore(s => s.openArticle);
   const clearArticle = useWikiStore(s => s.clearArticle);
+  const fetchAllArticles = useWikiStore(s => s.fetchAllArticles);
   const clearError = useWikiStore(s => s.clearError);
 
   const closeDrawer = useUIStore(s => s.closeDrawer);
@@ -32,12 +39,18 @@ export function WikiViewer({ tagId, tagName }: WikiViewerProps) {
   useEffect(() => {
     fetchArticle(tagId);
     fetchArticleStatus(tagId);
+    fetchRelatedTags(tagId);
+    fetchWikiLinks(tagId);
+    // Ensure articles list is available for implicit back-linking
+    if (articles.length === 0) {
+      fetchAllArticles();
+    }
 
     // Cleanup when unmounting
     return () => {
       clearArticle();
     };
-  }, [tagId, fetchArticle, fetchArticleStatus, clearArticle]);
+  }, [tagId, fetchArticle, fetchArticleStatus, fetchRelatedTags, fetchWikiLinks, clearArticle, articles.length, fetchAllArticles]);
 
   const handleGenerate = () => {
     generateArticle(tagId, tagName);
@@ -53,6 +66,10 @@ export function WikiViewer({ tagId, tagName }: WikiViewerProps) {
 
   const handleViewAtom = (atomId: string) => {
     openDrawer('viewer', atomId);
+  };
+
+  const handleNavigateToArticle = (targetTagId: string, targetTagName: string) => {
+    openArticle(targetTagId, targetTagName);
   };
 
   // Loading state
@@ -181,10 +198,13 @@ export function WikiViewer({ tagId, tagName }: WikiViewerProps) {
         <WikiArticleContent
           article={currentArticle.article}
           citations={currentArticle.citations}
+          wikiLinks={wikiLinks}
+          relatedTags={relatedTags}
+          allArticles={articles}
           onViewAtom={handleViewAtom}
+          onNavigateToArticle={handleNavigateToArticle}
         />
       </div>
     </div>
   );
 }
-

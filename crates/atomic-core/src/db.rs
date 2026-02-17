@@ -261,6 +261,25 @@ impl Database {
                 used INTEGER NOT NULL DEFAULT 0,
                 token_id TEXT
             );
+
+            -- Wiki inter-article links (cross-references between wiki articles)
+            CREATE TABLE IF NOT EXISTS wiki_links (
+                id TEXT PRIMARY KEY,
+                source_article_id TEXT NOT NULL REFERENCES wiki_articles(id) ON DELETE CASCADE,
+                target_tag_name TEXT NOT NULL COLLATE NOCASE,
+                target_tag_id TEXT REFERENCES tags(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_wiki_links_source ON wiki_links(source_article_id);
+            CREATE INDEX IF NOT EXISTS idx_wiki_links_target_tag ON wiki_links(target_tag_id);
+
+            -- Tag-level centroid embeddings (average of atom chunk embeddings)
+            CREATE TABLE IF NOT EXISTS tag_embeddings (
+                tag_id TEXT PRIMARY KEY REFERENCES tags(id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL,
+                atom_count INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             "#,
         )?;
 
@@ -279,6 +298,46 @@ impl Database {
                 "CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[1536])",
                 [],
             )?;
+        }
+
+        // Create vec_tags virtual table for tag centroid similarity search.
+        // Must match vec_chunks dimension — extract it from vec_chunks CREATE statement.
+        let vec_chunks_dim: usize = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_chunks'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|sql| {
+                // Parse "float[N]" from the CREATE statement
+                let start = sql.find("float[")?;
+                let after = &sql[start + 6..];
+                let end = after.find(']')?;
+                after[..end].parse::<usize>().ok()
+            })
+            .unwrap_or(1536);
+
+        // Check if vec_tags exists and has the right dimension
+        let vec_tags_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_tags'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+
+        let vec_tags_correct = !vec_tags_sql.is_empty()
+            && vec_tags_sql.contains(&format!("float[{}]", vec_chunks_dim));
+
+        if !vec_tags_correct {
+            conn.execute("DROP TABLE IF EXISTS vec_tags", []).ok();
+            conn.execute("DELETE FROM tag_embeddings", []).ok();
+            let create_sql = format!(
+                "CREATE VIRTUAL TABLE vec_tags USING vec0(tag_id TEXT PRIMARY KEY, embedding float[{}])",
+                vec_chunks_dim
+            );
+            conn.execute(&create_sql, [])?;
         }
 
         // FTS5 table for keyword search (external content backed by atom_chunks).
@@ -394,6 +453,15 @@ pub fn recreate_vec_chunks_with_dimension(
 
     // Clear canvas positions
     conn.execute("DELETE FROM atom_positions", [])?;
+
+    // Clear tag embeddings and recreate vec_tags with new dimension
+    conn.execute("DELETE FROM tag_embeddings", []).ok();
+    conn.execute("DROP TABLE IF EXISTS vec_tags", [])?;
+    let vec_tags_sql = format!(
+        "CREATE VIRTUAL TABLE vec_tags USING vec0(tag_id TEXT PRIMARY KEY, embedding float[{}])",
+        dimension
+    );
+    conn.execute(&vec_tags_sql, [])?;
 
     Ok(())
 }

@@ -10,4 +10,5 @@ export { WikiGenerating } from './WikiGenerating';
 export { CitationLink } from './CitationLink';
 export { CitationPopover } from './CitationPopover';
 export type { CitationForPopover } from './CitationPopover';
+export { WikiLinkInline } from './WikiLinkInline';
 

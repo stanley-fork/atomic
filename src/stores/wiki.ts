@@ -38,6 +38,32 @@ export interface WikiArticleSummary {
   tag_name: string;
   updated_at: string;
   atom_count: number;
+  inbound_links: number;
+}
+
+export interface WikiLink {
+  id: string;
+  source_article_id: string;
+  target_tag_name: string;
+  target_tag_id: string | null;
+  has_article: boolean;
+}
+
+export interface RelatedTag {
+  tag_id: string;
+  tag_name: string;
+  score: number;
+  shared_atoms: number;
+  semantic_edges: number;
+  has_article: boolean;
+}
+
+export interface SuggestedArticle {
+  tag_id: string;
+  tag_name: string;
+  atom_count: number;
+  mention_count: number;
+  score: number;
 }
 
 type WikiView = 'list' | 'article';
@@ -52,9 +78,15 @@ interface WikiStore {
   articles: WikiArticleSummary[];
   isLoadingList: boolean;
 
+  // Suggestions state
+  suggestedArticles: SuggestedArticle[];
+  isLoadingSuggestions: boolean;
+
   // Current article state
   currentArticle: WikiArticleWithCitations | null;
   articleStatus: WikiArticleStatus | null;
+  relatedTags: RelatedTag[];
+  wikiLinks: WikiLink[];
 
   // Loading states
   isLoading: boolean;
@@ -64,6 +96,7 @@ interface WikiStore {
 
   // List actions
   fetchAllArticles: () => Promise<void>;
+  fetchSuggestedArticles: () => Promise<void>;
   showList: () => void;
   openArticle: (tagId: string, tagName: string) => void;
   openAndGenerate: (tagId: string, tagName: string) => void;
@@ -72,6 +105,8 @@ interface WikiStore {
   // Article actions
   fetchArticle: (tagId: string) => Promise<void>;
   fetchArticleStatus: (tagId: string) => Promise<void>;
+  fetchRelatedTags: (tagId: string) => Promise<void>;
+  fetchWikiLinks: (tagId: string) => Promise<void>;
   generateArticle: (tagId: string, tagName: string) => Promise<void>;
   updateArticle: (tagId: string, tagName: string) => Promise<void>;
   deleteArticle: (tagId: string) => Promise<void>;
@@ -90,9 +125,15 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
   articles: [],
   isLoadingList: false,
 
+  // Suggestions state
+  suggestedArticles: [],
+  isLoadingSuggestions: false,
+
   // Current article state
   currentArticle: null,
   articleStatus: null,
+  relatedTags: [],
+  wikiLinks: [],
   isLoading: false,
   isGenerating: false,
   isUpdating: false,
@@ -103,8 +144,21 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
     try {
       const articles = await getTransport().invoke<WikiArticleSummary[]>('get_all_wiki_articles');
       set({ articles, isLoadingList: false });
+      // Refresh suggestions after a brief yield so the list renders first
+      setTimeout(() => get().fetchSuggestedArticles(), 50);
     } catch (error) {
       set({ error: String(error), isLoadingList: false });
+    }
+  },
+
+  fetchSuggestedArticles: async () => {
+    set({ isLoadingSuggestions: true });
+    try {
+      const suggestions = await getTransport().invoke<SuggestedArticle[]>('get_suggested_wiki_articles', { limit: 100 });
+      set({ suggestedArticles: suggestions, isLoadingSuggestions: false });
+    } catch (error) {
+      console.error('Failed to fetch suggested articles:', error);
+      set({ isLoadingSuggestions: false });
     }
   },
 
@@ -115,6 +169,8 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       currentTagName: null,
       currentArticle: null,
       articleStatus: null,
+      relatedTags: [],
+      wikiLinks: [],
       error: null,
     });
   },
@@ -126,12 +182,16 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       currentTagName: tagName,
       currentArticle: null,
       articleStatus: null,
+      relatedTags: [],
+      wikiLinks: [],
       isLoading: true,
       error: null,
     });
-    // Fetch article and status
+    // Fetch article, status, related tags, and wiki links
     get().fetchArticle(tagId);
     get().fetchArticleStatus(tagId);
+    get().fetchRelatedTags(tagId);
+    get().fetchWikiLinks(tagId);
   },
 
   // Open article view and immediately start generating (for new wikis)
@@ -142,6 +202,8 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       currentTagName: tagName,
       currentArticle: null,
       articleStatus: null,
+      relatedTags: [],
+      wikiLinks: [],
       isLoading: false,
       isGenerating: true,
       error: null,
@@ -159,6 +221,8 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       currentTagName: null,
       currentArticle: null,
       articleStatus: null,
+      relatedTags: [],
+      wikiLinks: [],
       error: null,
     });
     // Refresh list in case changes were made
@@ -184,13 +248,33 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
     }
   },
 
+  fetchRelatedTags: async (tagId: string) => {
+    try {
+      const tags = await getTransport().invoke<RelatedTag[]>('get_related_tags', { tagId, limit: 10 });
+      set({ relatedTags: tags });
+    } catch (error) {
+      console.error('Failed to fetch related tags:', error);
+    }
+  },
+
+  fetchWikiLinks: async (tagId: string) => {
+    try {
+      const links = await getTransport().invoke<WikiLink[]>('get_wiki_links', { tagId });
+      set({ wikiLinks: links });
+    } catch (error) {
+      console.error('Failed to fetch wiki links:', error);
+    }
+  },
+
   generateArticle: async (tagId: string, tagName: string) => {
     set({ isGenerating: true, error: null });
     try {
       const article = await getTransport().invoke<WikiArticleWithCitations>('generate_wiki_article', { tagId, tagName });
       set({ currentArticle: article, isGenerating: false });
-      // Refresh status after generation
+      // Refresh status, related tags, and wiki links after generation
       get().fetchArticleStatus(tagId);
+      get().fetchRelatedTags(tagId);
+      get().fetchWikiLinks(tagId);
       // Also refresh the list to include the new article
       get().fetchAllArticles();
     } catch (error) {
@@ -203,8 +287,10 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
     try {
       const article = await getTransport().invoke<WikiArticleWithCitations>('update_wiki_article', { tagId, tagName });
       set({ currentArticle: article, isUpdating: false });
-      // Refresh status after update
+      // Refresh status, related tags, and wiki links after update
       get().fetchArticleStatus(tagId);
+      get().fetchRelatedTags(tagId);
+      get().fetchWikiLinks(tagId);
       // Also refresh the list
       get().fetchAllArticles();
     } catch (error) {
@@ -215,7 +301,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
   deleteArticle: async (tagId: string) => {
     try {
       await getTransport().invoke('delete_wiki_article', { tagId });
-      set({ currentArticle: null, articleStatus: null });
+      set({ currentArticle: null, articleStatus: null, relatedTags: [], wikiLinks: [] });
       // Refresh the list
       get().fetchAllArticles();
     } catch (error) {
@@ -224,7 +310,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
   },
 
   clearArticle: () => {
-    set({ currentArticle: null, articleStatus: null, error: null });
+    set({ currentArticle: null, articleStatus: null, relatedTags: [], wikiLinks: [], error: null });
   },
 
   clearError: () => {
@@ -238,8 +324,12 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       currentTagName: null,
       articles: [],
       isLoadingList: false,
+      suggestedArticles: [],
+      isLoadingSuggestions: false,
       currentArticle: null,
       articleStatus: null,
+      relatedTags: [],
+      wikiLinks: [],
       isLoading: false,
       isGenerating: false,
       isUpdating: false,

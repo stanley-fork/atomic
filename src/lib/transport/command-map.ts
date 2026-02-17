@@ -175,6 +175,23 @@ export const COMMAND_MAP: Record<string, CommandSpec> = {
     method: 'DELETE',
     path: (a) => `/api/wiki/${encodeURIComponent(a.tagId as string)}`,
   },
+  get_related_tags: {
+    method: 'GET',
+    path: (a) => `/api/wiki/${encodeURIComponent(a.tagId as string)}/related`,
+  },
+  get_wiki_links: {
+    method: 'GET',
+    path: (a) => `/api/wiki/${encodeURIComponent(a.tagId as string)}/links`,
+  },
+  get_suggested_wiki_articles: {
+    method: 'GET',
+    path: (a) => `/api/wiki/suggestions?limit=${a.limit ?? 10}`,
+  },
+  recompute_all_tag_embeddings: {
+    method: 'POST',
+    path: '/api/wiki/recompute-tag-embeddings',
+    transformResponse: (d: any) => d.count as number,
+  },
 
   // ==================== Settings ====================
   get_settings: {

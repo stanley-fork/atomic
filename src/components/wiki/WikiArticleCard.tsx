@@ -27,6 +27,11 @@ export function WikiArticleCard({ article, onClick }: WikiArticleCardProps) {
             <span className="text-[var(--color-text-secondary)]">
               {article.atom_count} {article.atom_count === 1 ? 'source' : 'sources'}
             </span>
+            {article.inbound_links > 0 && (
+              <span className="text-[var(--color-accent-light)]">
+                {article.inbound_links} {article.inbound_links === 1 ? 'link' : 'links'}
+              </span>
+            )}
           </div>
         </div>
 

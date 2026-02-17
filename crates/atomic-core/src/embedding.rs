@@ -344,6 +344,14 @@ async fn process_embedding_only_inner(
             }
         }
 
+        // Recompute tag centroid embeddings for this atom's tags
+        let tag_ids = get_tag_ids_for_atom(&conn, atom_id);
+        if !tag_ids.is_empty() {
+            if let Err(e) = compute_tag_embeddings_batch(&conn, &tag_ids) {
+                eprintln!("Warning: Failed to recompute tag embeddings for atom {}: {}", atom_id, e);
+            }
+        }
+
         // Set embedding status to complete
         conn.execute(
             "UPDATE atoms SET embedding_status = 'complete' WHERE id = ?1",
@@ -914,6 +922,26 @@ pub async fn process_embedding_batch<F>(
         );
     }
 
+    // === Phase 4c: Recompute tag centroid embeddings for affected tags ===
+    if !completed_atom_ids.is_empty() {
+        let conn = db.conn.lock().expect("DB lock failed");
+
+        // Collect all unique tag IDs affected by the embedded atoms
+        let mut affected_tag_ids: Vec<String> = Vec::new();
+        for atom_id in &completed_atom_ids {
+            affected_tag_ids.extend(get_tag_ids_for_atom(&conn, atom_id));
+        }
+        affected_tag_ids.sort();
+        affected_tag_ids.dedup();
+
+        if !affected_tag_ids.is_empty() {
+            eprintln!("Recomputing centroid embeddings for {} tags...", affected_tag_ids.len());
+            if let Err(e) = compute_tag_embeddings_batch(&conn, &affected_tag_ids) {
+                eprintln!("Warning: Failed to recompute tag embeddings: {}", e);
+            }
+        }
+    }
+
     // === Phase 5: Wait for tagging to complete ===
     for task in tagging_tasks {
         let _ = task.await;
@@ -1135,6 +1163,131 @@ where
     }
 
     Ok(count)
+}
+
+/// Compute the centroid embedding for a single tag.
+///
+/// Averages all chunk embeddings from atoms under this tag (including descendant tags),
+/// normalizes to unit length, and upserts into `tag_embeddings` + `vec_tags`.
+pub fn compute_tag_embedding(conn: &rusqlite::Connection, tag_id: &str) -> Result<(), String> {
+    // Get all chunk embeddings for atoms under this tag hierarchy
+    let embeddings: Vec<Vec<u8>> = {
+        let mut stmt = conn
+            .prepare(
+                "WITH RECURSIVE descendant_tags(id) AS (
+                    SELECT ?1
+                    UNION ALL
+                    SELECT t.id FROM tags t
+                    INNER JOIN descendant_tags dt ON t.parent_id = dt.id
+                )
+                SELECT ac.embedding
+                FROM atom_chunks ac
+                INNER JOIN atom_tags at ON ac.atom_id = at.atom_id
+                WHERE at.tag_id IN (SELECT id FROM descendant_tags)
+                  AND ac.embedding IS NOT NULL",
+            )
+            .map_err(|e| format!("Failed to prepare tag embedding query: {}", e))?;
+
+        let results = stmt.query_map([tag_id], |row| row.get(0))
+            .map_err(|e| format!("Failed to query tag embeddings: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect tag embeddings: {}", e))?;
+        results
+    };
+
+    if embeddings.is_empty() {
+        // No embeddings — remove any existing tag embedding
+        conn.execute("DELETE FROM vec_tags WHERE tag_id = ?1", [tag_id]).ok();
+        conn.execute("DELETE FROM tag_embeddings WHERE tag_id = ?1", [tag_id]).ok();
+        return Ok(());
+    }
+
+    // Determine dimension from first embedding blob
+    let dim = embeddings[0].len() / 4;
+    if dim == 0 {
+        return Ok(());
+    }
+
+    // Average all vectors component-wise
+    let mut centroid = vec![0.0f64; dim];
+    let count = embeddings.len() as f64;
+
+    for blob in &embeddings {
+        if blob.len() != dim * 4 {
+            continue;
+        }
+        for i in 0..dim {
+            let bytes: [u8; 4] = [
+                blob[i * 4],
+                blob[i * 4 + 1],
+                blob[i * 4 + 2],
+                blob[i * 4 + 3],
+            ];
+            centroid[i] += f32::from_le_bytes(bytes) as f64;
+        }
+    }
+
+    for val in &mut centroid {
+        *val /= count;
+    }
+
+    // Normalize to unit length
+    let magnitude: f64 = centroid.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if magnitude > 0.0 {
+        for val in &mut centroid {
+            *val /= magnitude;
+        }
+    }
+
+    // Convert to f32 and then to blob
+    let centroid_f32: Vec<f32> = centroid.iter().map(|v| *v as f32).collect();
+    let embedding_blob = f32_vec_to_blob_public(&centroid_f32);
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let atom_count = embeddings.len() as i32;
+
+    // Upsert into tag_embeddings
+    conn.execute(
+        "INSERT OR REPLACE INTO tag_embeddings (tag_id, embedding, atom_count, updated_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![tag_id, &embedding_blob, atom_count, &now],
+    )
+    .map_err(|e| format!("Failed to upsert tag_embeddings: {}", e))?;
+
+    // Upsert into vec_tags (delete + insert since vec0 doesn't support REPLACE)
+    conn.execute("DELETE FROM vec_tags WHERE tag_id = ?1", [tag_id]).ok();
+    conn.execute(
+        "INSERT INTO vec_tags (tag_id, embedding) VALUES (?1, ?2)",
+        rusqlite::params![tag_id, &embedding_blob],
+    )
+    .map_err(|e| format!("Failed to upsert vec_tags: {}", e))?;
+
+    Ok(())
+}
+
+/// Compute centroid embeddings for multiple tags.
+pub fn compute_tag_embeddings_batch(
+    conn: &rusqlite::Connection,
+    tag_ids: &[String],
+) -> Result<(), String> {
+    for tag_id in tag_ids {
+        if let Err(e) = compute_tag_embedding(conn, tag_id) {
+            eprintln!("Warning: Failed to compute tag embedding for {}: {}", tag_id, e);
+        }
+    }
+    Ok(())
+}
+
+/// Get tag IDs for an atom from atom_tags table.
+fn get_tag_ids_for_atom(conn: &rusqlite::Connection, atom_id: &str) -> Vec<String> {
+    let mut stmt = match conn.prepare("SELECT tag_id FROM atom_tags WHERE atom_id = ?1") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map([atom_id], |row| row.get(0))
+        .ok()
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
