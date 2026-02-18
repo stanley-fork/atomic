@@ -93,9 +93,8 @@ impl Database {
         // Checkpoint any WAL from a previous run to start clean
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
 
-        if create {
-            Self::run_migrations(&conn)?;
-        }
+        // Always run migrations — idempotent, handles both new and existing DBs
+        Self::run_migrations(&conn)?;
 
         let db_path = path.to_path_buf();
 
