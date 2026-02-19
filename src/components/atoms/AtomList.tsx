@@ -2,6 +2,7 @@ import { memo, useRef, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { DisplayAtom } from '../../stores/atoms';
 import { AtomCard } from './AtomCard';
+import { AtomCardSkeleton } from './AtomCardSkeleton';
 
 interface AtomListProps {
   atoms: DisplayAtom[];
@@ -9,6 +10,8 @@ interface AtomListProps {
   getMatchingChunkContent?: (atomId: string) => string | undefined;
   onRetryEmbedding?: (atomId: string) => void;
   onLoadMore?: () => void;
+  isLoading?: boolean;
+  isLoadingMore?: boolean;
 }
 
 export const AtomList = memo(function AtomList({
@@ -17,6 +20,8 @@ export const AtomList = memo(function AtomList({
   getMatchingChunkContent,
   onRetryEmbedding,
   onLoadMore,
+  isLoading,
+  isLoadingMore,
 }: AtomListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -38,6 +43,18 @@ export const AtomList = memo(function AtomList({
       onLoadMore();
     }
   }, [virtualizer.getVirtualItems(), atoms.length, onLoadMore]);
+
+  if (atoms.length === 0 && isLoading) {
+    return (
+      <div ref={parentRef} className="h-full overflow-y-auto px-4 pt-4">
+        <div className="flex flex-col gap-2">
+          {Array.from({ length: 8 }, (_, i) => (
+            <AtomCardSkeleton key={i} viewMode="list" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   if (atoms.length === 0) {
     return (
@@ -67,7 +84,7 @@ export const AtomList = memo(function AtomList({
     <div ref={parentRef} className="h-full overflow-y-auto">
       <div
         className="relative w-full px-4 pt-4"
-        style={{ height: `${virtualizer.getTotalSize() + 16}px` }}
+        style={{ height: `${virtualizer.getTotalSize() + 16 + (isLoadingMore ? 48 : 0)}px` }}
       >
         {virtualizer.getVirtualItems().map((virtualItem) => {
           const atom = atoms[virtualItem.index];
@@ -91,6 +108,14 @@ export const AtomList = memo(function AtomList({
             </div>
           );
         })}
+        {isLoadingMore && (
+          <div
+            className="absolute left-0 right-0 flex justify-center py-3"
+            style={{ top: `${virtualizer.getTotalSize()}px` }}
+          >
+            <div className="h-5 w-5 border-2 border-[var(--color-border)] border-t-[var(--color-accent)] rounded-full animate-spin" />
+          </div>
+        )}
       </div>
     </div>
   );

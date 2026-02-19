@@ -2,6 +2,7 @@ import { memo, useRef, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { DisplayAtom } from '../../stores/atoms';
 import { AtomCard } from './AtomCard';
+import { AtomCardSkeleton } from './AtomCardSkeleton';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
 
 const CARD_MIN_WIDTH = 260;
@@ -15,6 +16,8 @@ interface AtomGridProps {
   getMatchingChunkContent?: (atomId: string) => string | undefined;
   onRetryEmbedding?: (atomId: string) => void;
   onLoadMore?: () => void;
+  isLoading?: boolean;
+  isLoadingMore?: boolean;
 }
 
 export const AtomGrid = memo(function AtomGrid({
@@ -23,6 +26,8 @@ export const AtomGrid = memo(function AtomGrid({
   getMatchingChunkContent,
   onRetryEmbedding,
   onLoadMore,
+  isLoading,
+  isLoadingMore,
 }: AtomGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const containerWidth = useContainerWidth(parentRef);
@@ -53,6 +58,24 @@ export const AtomGrid = memo(function AtomGrid({
     }
   }, [virtualizer.getVirtualItems(), rowCount, onLoadMore, ready]);
 
+  if (atoms.length === 0 && isLoading) {
+    return (
+      <div ref={parentRef} className="h-full overflow-y-auto p-4">
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(auto-fill, minmax(${CARD_MIN_WIDTH}px, 1fr))`,
+            gap: `${CARD_GAP}px`,
+          }}
+        >
+          {Array.from({ length: 8 }, (_, i) => (
+            <AtomCardSkeleton key={i} viewMode="grid" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (atoms.length === 0) {
     return (
       <div ref={parentRef} className="flex flex-col items-center justify-center h-full text-center p-8">
@@ -81,7 +104,7 @@ export const AtomGrid = memo(function AtomGrid({
     <div ref={parentRef} className="h-full overflow-y-auto">
       <div
         className="relative w-full p-4"
-        style={{ height: `${virtualizer.getTotalSize() + PADDING * 2}px` }}
+        style={{ height: `${virtualizer.getTotalSize() + PADDING * 2 + (isLoadingMore ? 48 : 0)}px` }}
       >
         {ready && virtualizer.getVirtualItems().map((virtualRow) => {
           const startIndex = virtualRow.index * columnCount;
@@ -111,6 +134,14 @@ export const AtomGrid = memo(function AtomGrid({
             </div>
           );
         })}
+        {isLoadingMore && (
+          <div
+            className="absolute left-0 right-0 flex justify-center py-3"
+            style={{ top: `${virtualizer.getTotalSize()}px` }}
+          >
+            <div className="h-5 w-5 border-2 border-[var(--color-border)] border-t-[var(--color-accent)] rounded-full animate-spin" />
+          </div>
+        )}
       </div>
     </div>
   );

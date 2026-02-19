@@ -11,6 +11,8 @@ export function MainView() {
   const atoms = useAtomsStore(s => s.atoms);
   const totalCount = useAtomsStore(s => s.totalCount);
   const hasMore = useAtomsStore(s => s.hasMore);
+  const isLoadingInitial = useAtomsStore(s => s.isLoadingInitial);
+  const isLoadingMore = useAtomsStore(s => s.isLoadingMore);
   const fetchNextPage = useAtomsStore(s => s.fetchNextPage);
   const semanticSearchResults = useAtomsStore(s => s.semanticSearchResults);
   const semanticSearchQuery = useAtomsStore(s => s.semanticSearchQuery);
@@ -282,6 +284,8 @@ export function MainView() {
             getMatchingChunkContent={isSemanticSearch ? getMatchingChunkContent : undefined}
             onRetryEmbedding={handleRetryEmbedding}
             onLoadMore={handleLoadMore}
+            isLoading={isLoadingInitial}
+            isLoadingMore={isLoadingMore}
           />
         ) : (
           <AtomList
@@ -290,6 +294,8 @@ export function MainView() {
             getMatchingChunkContent={isSemanticSearch ? getMatchingChunkContent : undefined}
             onRetryEmbedding={handleRetryEmbedding}
             onLoadMore={handleLoadMore}
+            isLoading={isLoadingInitial}
+            isLoadingMore={isLoadingMore}
           />
         )}
       </div>
