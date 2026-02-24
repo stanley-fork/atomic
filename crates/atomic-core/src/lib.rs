@@ -2384,28 +2384,20 @@ impl AtomicCore {
             AtomicCoreError::Ingestion(e)
         })?;
 
-        // Get existing GUIDs for this feed
-        let existing_guids: std::collections::HashSet<String> = {
-            let conn = self.db.read_conn()?;
-            let mut stmt = conn.prepare("SELECT guid FROM feed_items WHERE feed_id = ?1")?;
-            let guids = stmt.query_map([feed_id], |row| row.get(0))?
-                .collect::<Result<std::collections::HashSet<_>, _>>()?;
-            guids
-        };
-
         let mut new_items = 0i32;
         let mut skipped = 0i32;
         let mut errors = 0i32;
 
         for item in &parsed.items {
-            if existing_guids.contains(&item.guid) {
+            // Claim the GUID atomically — if another poll already claimed it, skip.
+            if !self.claim_feed_item(feed_id, &item.guid)? {
                 continue;
             }
 
             let link = match &item.link {
                 Some(l) => l.clone(),
                 None => {
-                    self.record_feed_item(feed_id, &item.guid, None, true, Some("No link in feed item"))?;
+                    self.mark_feed_item_skipped(feed_id, &item.guid, "No link in feed item")?;
                     skipped += 1;
                     continue;
                 }
@@ -2424,17 +2416,17 @@ impl AtomicCore {
                         on_embed.clone(),
                     ) {
                         Ok(atom) => {
-                            self.record_feed_item(feed_id, &item.guid, Some(&atom.atom.id), false, None)?;
+                            self.complete_feed_item(feed_id, &item.guid, &atom.atom.id)?;
                             new_items += 1;
                         }
                         Err(e) => {
-                            self.record_feed_item(feed_id, &item.guid, None, true, Some(&e.to_string()))?;
+                            self.mark_feed_item_skipped(feed_id, &item.guid, &e.to_string())?;
                             errors += 1;
                         }
                     }
                 }
                 Err(reason) => {
-                    self.record_feed_item(feed_id, &item.guid, None, true, Some(&reason))?;
+                    self.mark_feed_item_skipped(feed_id, &item.guid, &reason)?;
                     skipped += 1;
                 }
             }
@@ -2541,21 +2533,35 @@ impl AtomicCore {
         results
     }
 
-    /// Helper: record a feed item (ingested or skipped).
-    fn record_feed_item(
-        &self,
-        feed_id: &str,
-        guid: &str,
-        atom_id: Option<&str>,
-        skipped: bool,
-        skip_reason: Option<&str>,
-    ) -> Result<(), AtomicCoreError> {
+    /// Atomically claim a feed item GUID. Returns true if this call claimed it,
+    /// false if it was already claimed by another poll.
+    fn claim_feed_item(&self, feed_id: &str, guid: &str) -> Result<bool, AtomicCoreError> {
         let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
         let now = chrono::Utc::now().to_rfc3339();
+        let changes = conn.execute(
+            "INSERT OR IGNORE INTO feed_items (feed_id, guid, skipped, seen_at)
+             VALUES (?1, ?2, 0, ?3)",
+            rusqlite::params![feed_id, guid, &now],
+        )?;
+        Ok(changes > 0)
+    }
+
+    /// Mark a claimed feed item as successfully ingested with its atom_id.
+    fn complete_feed_item(&self, feed_id: &str, guid: &str, atom_id: &str) -> Result<(), AtomicCoreError> {
+        let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
         conn.execute(
-            "INSERT OR IGNORE INTO feed_items (feed_id, guid, atom_id, skipped, skip_reason, seen_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![feed_id, guid, atom_id, skipped, skip_reason, &now],
+            "UPDATE feed_items SET atom_id = ?1 WHERE feed_id = ?2 AND guid = ?3",
+            rusqlite::params![atom_id, feed_id, guid],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a claimed feed item as skipped with a reason.
+    fn mark_feed_item_skipped(&self, feed_id: &str, guid: &str, reason: &str) -> Result<(), AtomicCoreError> {
+        let conn = self.db.conn.lock().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
+        conn.execute(
+            "UPDATE feed_items SET skipped = 1, skip_reason = ?1 WHERE feed_id = ?2 AND guid = ?3",
+            rusqlite::params![reason, feed_id, guid],
         )?;
         Ok(())
     }

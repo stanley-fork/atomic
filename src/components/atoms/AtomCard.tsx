@@ -17,9 +17,9 @@ function getDisplaySource(atom: DisplayAtom): string | null {
   return null;
 }
 
-/** Get the best display date for an atom — prefer published_at over created_at */
+/** Display date matches the default sort order (updated_at desc) */
 function getDisplayDate(atom: DisplayAtom): string {
-  return atom.published_at ?? atom.created_at;
+  return atom.updated_at;
 }
 
 interface AtomCardProps {
