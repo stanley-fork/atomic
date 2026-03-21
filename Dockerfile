@@ -96,3 +96,34 @@ COPY docker/nginx.conf /etc/nginx/conf.d/atomic.conf
 COPY --from=frontend-builder /app/dist-web/ /usr/share/nginx/html/
 
 EXPOSE 80
+
+# =============================================================================
+# Stage 5: All-in-one (server + nginx + frontend) for single-container deploys
+# =============================================================================
+FROM debian:bookworm-slim AS all-in-one
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl nginx supervisor && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --create-home --shell /bin/false atomic && \
+    mkdir -p /data && chown atomic:atomic /data
+
+COPY --from=rust-builder /usr/local/bin/atomic-server /usr/local/bin/atomic-server
+COPY --from=frontend-builder /app/dist-web/ /usr/share/nginx/html/
+
+# Nginx config (proxies to atomic-server on localhost)
+RUN rm -f /etc/nginx/sites-enabled/default
+COPY docker/nginx-fly.conf /etc/nginx/conf.d/atomic.conf
+
+# Supervisord config
+COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+VOLUME /data
+EXPOSE 8081
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+CMD ["sh", "-c", "chown -R atomic:atomic /data && exec supervisord -c /etc/supervisor/conf.d/supervisord.conf"]

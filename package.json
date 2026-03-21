@@ -26,7 +26,8 @@
     "db:reset-chunks": "node scripts/reset-chunks.js",
     "db:reset-chunks:force": "node scripts/reset-chunks.js --force --backup",
     "db:drop": "node scripts/drop-database.js",
-    "db:drop:force": "node scripts/drop-database.js --force --backup"
+    "db:drop:force": "node scripts/drop-database.js --force --backup",
+    "stress:wikipedia": "node scripts/stress-test-wikipedia.js"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",

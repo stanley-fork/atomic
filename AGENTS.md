@@ -50,13 +50,11 @@ The key design decision is **callback-based eventing**: operations that produce 
 
 ### `src-tauri` — Desktop Wrapper
 
-The Tauri app stores `AtomicCore` in managed state and exposes ~40 commands. Each command is a thin wrapper: unpack IPC args, call `core.method()`, return the result. For evented operations, it creates closures that bridge `EmbeddingEvent`/`ChatEvent` → `app_handle.emit()`, which the React frontend listens to via Tauri's `listen()` API.
-
-The Tauri app also spawns an embedded actix-web server on port 44380 for the browser extension and MCP integration.
+The Tauri app spawns `atomic-server` as a **sidecar process** and exposes a single IPC command (`get_local_server_config`) that returns the server's base URL and auth token. The frontend then connects to the sidecar over HTTP/WebSocket, exactly as it would to a standalone `atomic-server`. On exit, Tauri kills the sidecar.
 
 ### `atomic-server` — Headless HTTP Wrapper
 
-The standalone server wraps `atomic-core` with a full REST API (~47 endpoints) plus a WebSocket endpoint. The same thin-wrapper pattern applies: each route handler unpacks HTTP request params, calls `core.method()`, returns JSON.
+The standalone server wraps `atomic-core` with a full REST API (~78 routes) plus a WebSocket endpoint and a Streamable HTTP MCP endpoint. The same thin-wrapper pattern applies: each route handler unpacks HTTP request params, calls `core.method()`, returns JSON.
 
 Events flow through `tokio::sync::broadcast` — route handlers send `ServerEvent` variants into the channel, and WebSocket clients receive them. The event bridge converts `atomic-core` callbacks into broadcast messages, mirroring how Tauri bridges them to `app_handle.emit()`.
 
@@ -64,11 +62,9 @@ Authentication uses named, revocable API tokens stored as SHA-256 hashes. A defa
 
 ### Frontend Transport Abstraction
 
-The React frontend defines a `Transport` interface with `invoke()` and `subscribe()` methods. At startup, it auto-detects whether Tauri IPC is available:
-- **TauriTransport**: Direct pass-through to Tauri's `invoke()` and `listen()`
-- **HttpTransport**: Maps Tauri command names to HTTP specs (method, path, body/query transforms) via a command map, and normalizes WebSocket `ServerEvent` messages back into the same event names the Tauri transport uses
+The React frontend defines a `Transport` interface with `invoke()` and `subscribe()` methods. Both Tauri and browser environments use `HttpTransport`, which maps command names to HTTP specs (method, path, body/query transforms) via a command map and receives events via WebSocket. In Tauri, the frontend first calls `get_local_server_config` via Tauri IPC to get the sidecar's URL and token, then uses `HttpTransport` for everything else.
 
-This means the React code is transport-unaware — it calls `transport.invoke('create_atom', args)` and `transport.subscribe('embedding-complete', handler)` regardless of whether it's running inside Tauri or connected to `atomic-server` over HTTP.
+This means the React code is transport-unaware — it calls `transport.invoke('create_atom', args)` and `transport.subscribe('embedding-complete', handler)` regardless of environment.
 
 ## AI Provider Abstraction
 
@@ -102,13 +98,14 @@ Development is fully headless (no Xcode GUI required). Uses `xcodebuild` + `xcru
 ```
 Cargo.toml                  # Workspace root
 crates/atomic-core/         # All business logic (no framework deps)
-crates/atomic-server/       # Headless REST + WebSocket server
-crates/atomic-mcp/          # Standalone MCP server binary
+crates/atomic-server/       # Headless REST + WS + MCP server
+crates/atomic-mcp/          # Standalone MCP server (stdio, direct DB)
 crates/mcp-bridge/          # HTTP-to-stdio MCP bridge
-src-tauri/                  # Tauri desktop app (thin wrapper)
+src-tauri/                  # Tauri desktop app (sidecar launcher)
 src/                        # React frontend (TypeScript)
 ios/                        # Native iOS app (SwiftUI, HTTP client)
 scripts/                    # Import, build, and database utilities
+databases/                  # Local data dir (registry.db + per-DB files)
 ```
 
 ## Tech Stack
@@ -133,13 +130,14 @@ cargo check                   # Check all workspace crates
 cargo test                    # Run all tests
 cargo check -p atomic-core    # Check specific crate
 
-# Standalone server
-cargo run -p atomic-server -- --db-path /path/to/atomic.db serve --port 8080
+# Standalone server (--data-dir defaults to current directory)
+cargo run -p atomic-server -- serve --port 8080
+cargo run -p atomic-server -- --data-dir /path/to/data serve --port 8080
 
 # Token management
-cargo run -p atomic-server -- --db-path /path/to/atomic.db token create --name "my-laptop"
-cargo run -p atomic-server -- --db-path /path/to/atomic.db token list
-cargo run -p atomic-server -- --db-path /path/to/atomic.db token revoke <token-id>
+cargo run -p atomic-server -- token create --name "my-laptop"
+cargo run -p atomic-server -- token list
+cargo run -p atomic-server -- token revoke <token-id>
 
 # iOS app (headless dev workflow)
 cd ios && xcodegen generate                      # Regenerate .xcodeproj from project.yml
@@ -158,16 +156,48 @@ npm run release:patch         # Bump version and build
 
 ## Database
 
-SQLite with sqlite-vec extension. Location varies by platform:
-- macOS: `~/Library/Application Support/com.atomic.app/atomic.db`
-- Linux: `~/.local/share/com.atomic.app/atomic.db`
+SQLite with sqlite-vec extension. Multi-database support with a registry/data split:
 
-Migrations run automatically on startup. The schema includes tables for atoms, tags, chunks, embeddings, wiki articles, conversations, messages, semantic edges, atom positions, settings, and API tokens.
+### File Layout
 
-Similarity is computed from sqlite-vec's Euclidean distance on normalized vectors: `similarity = 1.0 - (distance / 2.0)`. Default thresholds: 0.7 for related atoms, 0.3 for semantic search and wiki chunk selection.
+When running via `atomic-server` from the repo root, databases live in `./databases/`:
+```
+databases/
+  registry.db          # Shared config: settings, API tokens, database metadata
+  default.db           # Default knowledge base
+  {uuid}.db            # Additional databases (created via API or multi-db)
+```
+
+When running the Tauri desktop app, the base directory is platform-specific:
+- macOS: `~/Library/Application Support/com.atomic.app/`
+- Linux: `~/.local/share/com.atomic.app/`
+
+### Registry vs Data Databases
+
+- **`registry.db`** holds cross-database state: settings (provider config, model selection), API tokens, and the `databases` table mapping UUIDs to names.
+- **Data databases** (`default.db`, `{uuid}.db`) each hold atoms, tags, chunks, embeddings, wiki articles, conversations, messages, semantic edges, and atom positions.
+
+### Direct Access with sqlite3
+
+```bash
+# List all databases
+sqlite3 databases/registry.db "SELECT id, name, is_default FROM databases;"
+
+# Check atom/embedding status in a specific database
+sqlite3 databases/{uuid}.db "SELECT embedding_status, COUNT(*) FROM atoms GROUP BY embedding_status;"
+
+# Check settings (provider, models, etc.)
+sqlite3 databases/registry.db "SELECT key, value FROM settings;"
+```
+
+Key tables in data databases: `atoms`, `atom_chunks`, `atom_tags`, `tags`, `semantic_edges`, `vec_chunks` (sqlite-vec virtual table), `wiki_articles`, `conversations`, `chat_messages`.
+
+### Similarity
+
+Computed from sqlite-vec's Euclidean distance on normalized vectors: `similarity = 1.0 - (distance² / 2.0)`. Default thresholds: 0.5 for related atoms/semantic edges, 0.3 for semantic search and wiki chunk selection.
 
 ## Design System
 
 Dark theme (Obsidian-inspired). Backgrounds: `#1e1e1e`/`#252525`/`#2d2d2d`. Accent: purple (`#7c3aed`). Three-panel layout: fixed-width left panel (tag tree, navigation), flexible main view (canvas/grid/list), overlay right drawer (editor, viewer, wiki, chat).
 
-Frontend state is managed by Zustand stores: `atoms`, `tags`, `ui`, `settings`, `wiki`, `chat`. The `ui` store tracks selected tag filter, drawer state, view mode, and search query. View mode (canvas/grid/list) persists to localStorage.
+Frontend state is managed by Zustand stores: `atoms`, `tags`, `ui`, `settings`, `wiki`, `chat`, `databases`. The `ui` store tracks selected tag filter, drawer state, view mode, and search query. View mode (canvas/grid/list) persists to localStorage.

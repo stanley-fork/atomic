@@ -381,6 +381,18 @@ export const COMMAND_MAP: Record<string, CommandSpec> = {
     transformResponse: (d: any) => d.configured as boolean,
   },
 
+  // ==================== Setup (public, no auth) ====================
+  get_setup_status: {
+    method: 'GET',
+    path: '/api/setup/status',
+  },
+  claim_instance: {
+    method: 'POST',
+    path: '/api/setup/claim',
+    argsMode: 'body',
+    transformArgs: (a) => ({ name: a.name }),
+  },
+
   // ==================== Auth / Tokens ====================
   create_api_token: {
     method: 'POST',

@@ -49,6 +49,10 @@ async fn main() -> std::io::Result<()> {
 
         // Server mode
         Some(Command::Serve { port, bind, public_url }) => {
+            // Auto-detect public URL on Fly.io if not explicitly set
+            let public_url = public_url.or_else(|| {
+                std::env::var("FLY_APP_NAME").ok().map(|name| format!("https://{name}.fly.dev"))
+            });
             let manager = atomic_core::DatabaseManager::new(&data_dir)
                 .expect("Failed to open database manager");
             run_server(manager, &data_dir.display().to_string(), port, &bind, public_url).await
@@ -139,20 +143,18 @@ async fn run_server(
         Err(e) => eprintln!("  Warning: failed to migrate legacy token: {}", e),
     }
 
-    // Ensure at least one token exists
-    match core.ensure_default_token() {
-        Ok(Some((_info, raw_token))) => {
-            println!("  New API token created: {}", raw_token);
-            println!("  Save this token — it won't be shown again.");
-            println!();
-        }
-        Ok(None) => {
-            // Tokens already exist
-            let tokens = core.list_api_tokens().unwrap_or_default();
+    // Check token status
+    match core.list_api_tokens() {
+        Ok(tokens) => {
             let active = tokens.iter().filter(|t| !t.is_revoked).count();
-            println!("  {} active API token(s) configured", active);
+            if active == 0 {
+                println!("  No API tokens configured — open the web UI to claim this instance");
+                println!("  Or create one with: atomic-server token create --name default");
+            } else {
+                println!("  {} active API token(s) configured", active);
+            }
         }
-        Err(e) => eprintln!("  Warning: failed to ensure default token: {}", e),
+        Err(e) => eprintln!("  Warning: failed to check tokens: {}", e),
     }
 
     // Create broadcast channel for WebSocket events (buffer 256 events)
@@ -288,6 +290,9 @@ async fn run_server(
                 "/.well-known/oauth-protected-resource/mcp",
                 web::get().to(routes::oauth::resource_metadata),
             )
+            // Instance setup (public, no auth — guarded by zero-token check)
+            .route("/api/setup/status", web::get().to(routes::setup::setup_status))
+            .route("/api/setup/claim", web::post().to(routes::setup::claim_instance))
             // OAuth flow (public, no auth)
             .route("/oauth/register", web::post().to(routes::oauth::register))
             .route(

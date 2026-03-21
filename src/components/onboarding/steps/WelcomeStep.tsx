@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Button } from '../../ui/Button';
 import { isDesktopApp, getTransport, switchTransport } from '../../../lib/transport';
 import type { OnboardingState, OnboardingAction } from '../useOnboardingState';
@@ -8,8 +9,64 @@ interface WelcomeStepProps {
   onNext: () => void;
 }
 
+type SetupMode = 'checking' | 'claim' | 'manual';
+
 export function WelcomeStep({ state, dispatch, onNext }: WelcomeStepProps) {
   const isDesktop = isDesktopApp();
+  const [setupMode, setSetupMode] = useState<SetupMode>('checking');
+  const [isClaiming, setIsClaiming] = useState(false);
+  const [claimError, setClaimError] = useState<string | null>(null);
+  const [claimedToken, setClaimedToken] = useState<string | null>(null);
+  const [tokenCopied, setTokenCopied] = useState(false);
+
+  // On mount (web mode only), check if we're co-hosted with the server
+  useEffect(() => {
+    if (isDesktop) return;
+    if (getTransport().isConnected()) return;
+
+    const baseUrl = window.location.origin;
+    fetch(`${baseUrl}/api/setup/status`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
+      .then((data: { needs_setup: boolean }) => {
+        if (data.needs_setup) {
+          dispatch({ type: 'SET_SERVER_URL', value: baseUrl });
+          setSetupMode('claim');
+        } else {
+          // Server exists at same origin but is already claimed — pre-fill URL
+          dispatch({ type: 'SET_SERVER_URL', value: baseUrl });
+          setSetupMode('manual');
+        }
+      })
+      .catch(() => {
+        // No co-hosted server — show manual form
+        setSetupMode('manual');
+      });
+  }, [isDesktop, dispatch]);
+
+  const handleClaim = async () => {
+    setIsClaiming(true);
+    setClaimError(null);
+    const baseUrl = state.serverUrl.trim().replace(/\/$/, '');
+    try {
+      const resp = await fetch(`${baseUrl}/api/setup/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'default' }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
+      // Connect with the new token, then show it to the user
+      await switchTransport({ baseUrl, authToken: data.token });
+      setClaimedToken(data.token);
+    } catch (e) {
+      setClaimError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setIsClaiming(false);
+    }
+  };
 
   const handleTestServer = async () => {
     if (!state.serverUrl.trim() || !state.serverToken.trim()) return;
@@ -81,7 +138,66 @@ export function WelcomeStep({ state, dispatch, onNext }: WelcomeStepProps) {
     );
   }
 
-  // Web mode: needs server connection
+  // Token reveal after claiming (must be checked before isConnected,
+  // since claiming connects the transport)
+  if (claimedToken) {
+    const handleCopyToken = async () => {
+      await navigator.clipboard.writeText(claimedToken);
+      setTokenCopied(true);
+      setTimeout(() => setTokenCopied(false), 2000);
+    };
+
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-center space-y-6 px-8">
+        <div className="w-16 h-16 rounded-2xl bg-green-500/10 flex items-center justify-center">
+          <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+
+        <div>
+          <h2 className="text-2xl font-bold text-[var(--color-text-primary)] mb-2">
+            Instance Claimed
+          </h2>
+          <p className="text-[var(--color-text-secondary)] max-w-md">
+            Save this API token somewhere safe. You'll need it to connect from other devices or if you clear your browser data.
+          </p>
+        </div>
+
+        <div className="w-full max-w-md space-y-2">
+          <div className="flex items-center gap-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-md p-3">
+            <code className="flex-1 text-sm text-[var(--color-text-primary)] break-all text-left font-mono">
+              {claimedToken}
+            </code>
+            <button
+              onClick={handleCopyToken}
+              className="shrink-0 p-1.5 rounded hover:bg-[var(--color-bg-hover)] transition-colors"
+              title="Copy to clipboard"
+            >
+              {tokenCopied ? (
+                <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4 text-[var(--color-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              )}
+            </button>
+          </div>
+          <p className="text-xs text-[var(--color-text-secondary)]">
+            This token won't be shown again.
+          </p>
+        </div>
+
+        <Button onClick={onNext}>
+          Continue
+        </Button>
+      </div>
+    );
+  }
+
+  // Web mode: already connected (e.g. returning user with saved config)
   const isConnected = getTransport().isConnected();
 
   if (isConnected) {
@@ -100,6 +216,54 @@ export function WelcomeStep({ state, dispatch, onNext }: WelcomeStepProps) {
     );
   }
 
+  // Checking for co-hosted server
+  if (setupMode === 'checking') {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-center space-y-4 px-8">
+        <div className="w-8 h-8 border-2 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm text-[var(--color-text-secondary)]">Detecting server...</p>
+      </div>
+    );
+  }
+
+  // Unclaimed instance — show claim UI
+  if (setupMode === 'claim') {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-center space-y-6 px-8">
+        <div className="w-16 h-16 rounded-2xl bg-[var(--color-accent)]/10 flex items-center justify-center">
+          <svg className="w-8 h-8 text-[var(--color-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+          </svg>
+        </div>
+
+        <div>
+          <h2 className="text-2xl font-bold text-[var(--color-text-primary)] mb-2">
+            Welcome to Atomic
+          </h2>
+          <p className="text-[var(--color-text-secondary)] max-w-md">
+            Your personal knowledge base is ready to set up. Claim this instance to create your admin token and get started.
+          </p>
+        </div>
+
+        <Button onClick={handleClaim} disabled={isClaiming}>
+          {isClaiming ? 'Setting up...' : 'Get Started'}
+        </Button>
+
+        {claimError && (
+          <div className="text-sm text-red-500">{claimError}</div>
+        )}
+
+        <button
+          className="text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
+          onClick={() => setSetupMode('manual')}
+        >
+          Connect to a different server instead
+        </button>
+      </div>
+    );
+  }
+
+  // Manual connection form
   return (
     <div className="space-y-6 px-2">
       <div className="text-center mb-6">
@@ -127,7 +291,7 @@ export function WelcomeStep({ state, dispatch, onNext }: WelcomeStepProps) {
             type="password"
             value={state.serverToken}
             onChange={(e) => dispatch({ type: 'SET_SERVER_TOKEN', value: e.target.value })}
-            placeholder="Token (printed by server on startup)"
+            placeholder="API token"
             className="w-full px-3 py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-md text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:border-transparent transition-colors duration-150 text-sm"
           />
         </div>
@@ -149,9 +313,8 @@ export function WelcomeStep({ state, dispatch, onNext }: WelcomeStepProps) {
         )}
 
         <div className="p-3 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-md text-xs text-[var(--color-text-secondary)] space-y-1">
-          <p>Start the server with:</p>
-          <code className="block text-[var(--color-text-primary)]">cargo run -p atomic-server -- --db-path /path/to/atomic.db serve</code>
-          <p>The auth token is printed to stdout on startup.</p>
+          <p>Don't have a token? Create one with:</p>
+          <code className="block text-[var(--color-text-primary)]">atomic-server token create --name my-token</code>
         </div>
       </div>
     </div>

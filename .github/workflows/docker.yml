@@ -18,6 +18,8 @@ jobs:
             image: atomic-server
           - target: web
             image: atomic-web
+          - target: all-in-one
+            image: atomic
 
     runs-on: ubuntu-latest
     permissions:

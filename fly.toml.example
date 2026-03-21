@@ -1,0 +1,38 @@
+# Fly.io configuration for Atomic
+# Copy to fly.toml and run: fly launch --copy-config --no-deploy
+#
+# See https://fly.io/docs/reference/configuration/
+
+app = 'your-app-name'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+  target = 'all-in-one'
+
+[[mounts]]
+  source = 'atomic_data'
+  destination = '/data'
+
+[http_service]
+  internal_port = 8081
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 250
+    soft_limit = 200
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '15s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'

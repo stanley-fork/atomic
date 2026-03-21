@@ -16,6 +16,7 @@ registry.db-wal
 registry.db-shm
 databases/
 docker-compose.prod.yml
+fly.toml
 
 # iOS
 ios/AtomicMobile.xcodeproj/

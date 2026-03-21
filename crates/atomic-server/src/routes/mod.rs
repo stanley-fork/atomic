@@ -14,6 +14,7 @@ mod ingest;
 pub mod oauth;
 mod ollama;
 mod search;
+pub mod setup;
 mod settings;
 mod utils;
 mod wiki;
