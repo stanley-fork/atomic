@@ -41,6 +41,10 @@
     ],
     "externalBin": [
       "binaries/atomic-server"
-    ]
+    ],
+    "macOS": {
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": null
+    }
   }
 }

@@ -3,6 +3,7 @@ import { TagTree } from '../tags/TagTree';
 import { SettingsButton, SettingsModal } from '../settings';
 import { DatabaseSwitcher } from '../DatabaseSwitcher';
 import { useUIStore } from '../../stores/ui';
+import { isTauri } from '../../lib/platform';
 
 const COLLAPSE_BREAKPOINT = 768;
 
@@ -58,7 +59,7 @@ export function LeftPanel() {
         `}
       >
         {/* Titlebar row with settings button */}
-        <div className="h-[52px] flex items-center px-3 flex-shrink-0 gap-1" data-tauri-drag-region>
+        <div className={`h-[52px] flex items-center px-3 flex-shrink-0 gap-1 ${isTauri() ? 'pl-[78px]' : ''}`} data-tauri-drag-region>
           <DatabaseSwitcher />
           <SettingsButton onClick={() => setIsSettingsOpen(true)} />
         </div>
