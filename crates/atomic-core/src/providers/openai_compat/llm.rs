@@ -289,7 +289,14 @@ async fn complete_internal(
         });
     }
 
-    let chat_response: ChatResponse = response.json().await?;
+    let body = response.text().await?;
+
+    let chat_response: ChatResponse = serde_json::from_str(&body)
+        .map_err(|e| {
+            eprintln!("OpenAI-compat LLM parse error: {e}");
+            eprintln!("Response body (first 500 chars): {}", &body[..body.len().min(500)]);
+            ProviderError::ParseError(format!("Failed to parse chat response: {e}"))
+        })?;
 
     let choice = chat_response
         .choices

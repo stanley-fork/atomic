@@ -63,7 +63,14 @@ pub async fn embed_batch(
         });
     }
 
-    let embedding_response: EmbeddingResponse = response.json().await?;
+    let body = response.text().await?;
+
+    let embedding_response: EmbeddingResponse = serde_json::from_str(&body)
+        .map_err(|e| {
+            eprintln!("OpenAI-compat embedding parse error: {e}");
+            eprintln!("Response body (first 500 chars): {}", &body[..body.len().min(500)]);
+            ProviderError::ParseError(format!("Failed to parse embedding response: {e}"))
+        })?;
 
     Ok(embedding_response
         .data
