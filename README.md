@@ -1,6 +1,7 @@
 # Atomic
 
-[![Docker Image Version](https://img.shields.io/github/v/tag/kenforthewin/atomic?label=docker&logo=docker)](https://github.com/kenforthewin/atomic/pkgs/container/atomic-server)
+[![Server Image](https://img.shields.io/github/v/tag/kenforthewin/atomic?label=server&logo=docker)](https://github.com/kenforthewin/atomic/pkgs/container/atomic-server)
+[![Web Image](https://img.shields.io/github/v/tag/kenforthewin/atomic?label=web&logo=docker)](https://github.com/kenforthewin/atomic/pkgs/container/atomic-web)
 
 A personal knowledge base that turns markdown notes into a semantically-connected, AI-augmented knowledge graph.
 
