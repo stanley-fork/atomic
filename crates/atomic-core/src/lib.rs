@@ -3799,4 +3799,23 @@ mod tests {
         assert_eq!(topics_tag.atom_count, 3);
     }
 
+    #[test]
+    fn test_strip_inline_markdown() {
+        // Backslash escapes
+        assert_eq!(strip_inline_markdown(r"U\.S\. policy"), "U.S. policy");
+        // Bold and italic
+        assert_eq!(strip_inline_markdown("**bold** and *italic*"), "bold and italic");
+        // Links: keep text, drop URL
+        assert_eq!(strip_inline_markdown("[click here](https://example.com)"), "click here");
+        // Images: drop entirely
+        assert_eq!(strip_inline_markdown("before ![alt](img.png) after"), "before  after");
+        // Inline code
+        assert_eq!(strip_inline_markdown("use `foo()` here"), "use foo() here");
+        // Mixed
+        assert_eq!(
+            strip_inline_markdown(r"The **U\.S\.** has [a link](http://x.com)"),
+            "The U.S. has a link"
+        );
+    }
+
 }
