@@ -115,7 +115,7 @@ export function HierarchicalCanvas() {
           id: node.id,
           title: node.label,
           snippet: '',
-          tags: [],
+          tags: (node.dominant_tags || []).map(name => ({ id: name, name })),
           source_url: null,
           source: null,
           published_at: null,
@@ -181,7 +181,7 @@ export function HierarchicalCanvas() {
                     className="absolute top-0 left-0 pointer-events-none"
                     width={dimensions.width}
                     height={dimensions.height}
-                    style={{ zIndex: 0 }}
+                    style={{ zIndex: 0, overflow: 'visible' }}
                   >
                     {edges.map((edge) => {
                       const src = nodePositionMap.get(edge.source_id);

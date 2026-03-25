@@ -170,68 +170,64 @@ pub fn get_canvas_level(
 
 // ==================== Level Builders ====================
 
-/// Root level: show top-level tag categories + Untagged + Other
+/// Root level: show semantic clusters of all atoms
 fn build_root_level(conn: &Connection) -> Result<CanvasLevel, AtomicCoreError> {
-    let tree = TagTree::load(conn)?;
+    // Compute semantic clusters on-demand from all semantic edges
+    let clusters = clustering::compute_atom_clusters(conn, CLUSTER_MIN_SIMILARITY, 3)
+        .map_err(|e| AtomicCoreError::Configuration(e))?;
 
-    // Identify root tags (no parent)
-    let root_tags: Vec<&(String, String, Option<String>)> = tree
-        .all_tags
-        .iter()
-        .filter(|(_, _, parent)| parent.is_none())
-        .collect();
+    let mut nodes: Vec<CanvasNode> = Vec::new();
+    let mut clustered_atom_ids: HashSet<String> = HashSet::new();
 
-    let mut nodes = Vec::new();
-
-    for (id, name, _) in &root_tags {
-        let has_children = tree.has_children(id);
-        let transitive_count = tree.transitive_count(id);
-
-        if has_children {
-            nodes.push(CanvasNode {
-                id: id.clone(),
-                node_type: CanvasNodeType::Category,
-                label: name.clone(),
-                atom_count: transitive_count,
-                children_ids: vec![],
-                dominant_tags: vec![],
-                centroid: None,
-            });
-        } else if transitive_count > 0 {
-            nodes.push(CanvasNode {
-                id: id.clone(),
-                node_type: CanvasNodeType::Tag,
-                label: name.clone(),
-                atom_count: transitive_count,
-                children_ids: vec![],
-                dominant_tags: vec![],
-                centroid: None,
-            });
+    for cluster in &clusters {
+        for aid in &cluster.atom_ids {
+            clustered_atom_ids.insert(aid.clone());
         }
-        // Skip empty orphan tags
-    }
 
-    // Count untagged atoms
-    let untagged_count: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM atoms WHERE id NOT IN (SELECT atom_id FROM atom_tags)",
-        [],
-        |row| row.get(0),
-    )?;
+        let label = if cluster.dominant_tags.len() >= 2 {
+            format!("{}, {}", cluster.dominant_tags[0], cluster.dominant_tags[1])
+        } else if !cluster.dominant_tags.is_empty() {
+            cluster.dominant_tags[0].clone()
+        } else {
+            format!("Cluster {}", cluster.cluster_id + 1)
+        };
 
-    if untagged_count > 0 {
         nodes.push(CanvasNode {
-            id: "untagged".to_string(),
-            node_type: CanvasNodeType::Category,
-            label: "Untagged".to_string(),
-            atom_count: untagged_count,
-            children_ids: vec![],
-            dominant_tags: vec![],
+            id: format!("cluster:{}", cluster.cluster_id),
+            node_type: CanvasNodeType::SemanticCluster,
+            label,
+            atom_count: cluster.atom_ids.len() as i32,
+            children_ids: cluster.atom_ids.clone(),
+            dominant_tags: cluster.dominant_tags.clone(),
             centroid: None,
         });
     }
 
-    // Skip edge computation at root — too many atoms, not useful
-    let edges = compute_edges_if_small(conn, &nodes)?;
+    // Find unclustered atoms (no semantic edges or below min_cluster_size)
+    let unclustered_ids = get_unclustered_atom_ids(conn, &clustered_atom_ids)?;
+
+    if !unclustered_ids.is_empty() {
+        if unclustered_ids.len() <= MAX_ATOMS_PER_LEVEL {
+            // Few enough to show individually
+            let mut atom_nodes = build_flat_atom_nodes(conn, &unclustered_ids)?;
+            nodes.append(&mut atom_nodes);
+        } else {
+            // Too many — wrap in a single "Unclustered" bubble
+            let dominant = get_dominant_tags_for_atoms(conn, &unclustered_ids).unwrap_or_default();
+            nodes.push(CanvasNode {
+                id: "cluster:unclustered".to_string(),
+                node_type: CanvasNodeType::SemanticCluster,
+                label: "Unclustered".to_string(),
+                atom_count: unclustered_ids.len() as i32,
+                children_ids: unclustered_ids,
+                dominant_tags: dominant,
+                centroid: None,
+            });
+        }
+    }
+
+    // Compute inter-cluster edges
+    let edges = compute_edges_between_nodes_simple(conn, &nodes)?;
 
     Ok(CanvasLevel {
         parent_id: None,
@@ -240,6 +236,32 @@ fn build_root_level(conn: &Connection) -> Result<CanvasLevel, AtomicCoreError> {
         nodes,
         edges,
     })
+}
+
+/// Get atom IDs not present in any cluster
+fn get_unclustered_atom_ids(
+    conn: &Connection,
+    clustered_ids: &HashSet<String>,
+) -> Result<Vec<String>, AtomicCoreError> {
+    if clustered_ids.is_empty() {
+        let mut stmt = conn.prepare("SELECT id FROM atoms ORDER BY updated_at DESC")?;
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        return Ok(ids);
+    }
+
+    let clustered_vec: Vec<String> = clustered_ids.iter().cloned().collect();
+    populate_temp_table(conn, "_clustered_atoms", &clustered_vec)?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id FROM atoms WHERE id NOT IN (SELECT id FROM _clustered_atoms)
+         ORDER BY updated_at DESC",
+    )?;
+    let ids: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(ids)
 }
 
 /// Tag/Category drill-down: show children of a tag
@@ -364,20 +386,8 @@ fn build_untagged_level(conn: &Connection) -> Result<CanvasLevel, AtomicCoreErro
         .collect::<Result<Vec<_>, _>>()?;
 
     if atoms.len() <= MAX_ATOMS_PER_LEVEL {
-        let nodes: Vec<CanvasNode> = atoms
-            .iter()
-            .map(|(id, content)| CanvasNode {
-                id: id.clone(),
-                node_type: CanvasNodeType::Atom,
-                label: snippet_label(content),
-                atom_count: 1,
-                children_ids: vec![],
-                dominant_tags: vec![],
-                centroid: None,
-            })
-            .collect();
-
         let atom_ids: Vec<String> = atoms.iter().map(|(id, _)| id.clone()).collect();
+        let nodes = build_flat_atom_nodes(conn, &atom_ids)?;
         let edges = compute_edges_for_atom_set(conn, &atom_ids)?;
 
         Ok(CanvasLevel {
@@ -423,20 +433,8 @@ fn build_atoms_for_tag(
         .collect::<Result<Vec<_>, _>>()?;
 
     if atoms.len() <= MAX_ATOMS_PER_LEVEL {
-        let nodes: Vec<CanvasNode> = atoms
-            .iter()
-            .map(|(id, content)| CanvasNode {
-                id: id.clone(),
-                node_type: CanvasNodeType::Atom,
-                label: snippet_label(content),
-                atom_count: 1,
-                children_ids: vec![],
-                dominant_tags: vec![],
-                centroid: None,
-            })
-            .collect();
-
         let atom_ids: Vec<String> = atoms.iter().map(|(id, _)| id.clone()).collect();
+        let nodes = build_flat_atom_nodes(conn, &atom_ids)?;
         let edges = compute_edges_for_atom_set(conn, &atom_ids)?;
 
         Ok(CanvasLevel {
@@ -564,23 +562,7 @@ fn build_hint_level(
         // Assume atoms
         let atom_ids = hint_ids.to_vec();
         if atom_ids.len() <= MAX_ATOMS_PER_LEVEL {
-            let atoms = batch_lookup_atom_snippets(conn, &atom_ids)?;
-
-            let nodes: Vec<CanvasNode> = atom_ids
-                .iter()
-                .filter_map(|id| {
-                    let content = atoms.get(id)?;
-                    Some(CanvasNode {
-                        id: id.clone(),
-                        node_type: CanvasNodeType::Atom,
-                        label: snippet_label(content),
-                        atom_count: 1,
-                        children_ids: vec![],
-                        dominant_tags: vec![],
-                        centroid: None,
-                    })
-                })
-                .collect();
+            let nodes = build_flat_atom_nodes(conn, &atom_ids)?;
 
             let edges = compute_edges_for_atom_set(conn, &atom_ids)?;
 
@@ -1042,19 +1024,68 @@ fn build_flat_atom_nodes(
     }
 
     let atoms = batch_lookup_atom_snippets(conn, atom_ids)?;
+    let atom_tags = batch_lookup_atom_tags(conn, atom_ids)?;
 
     Ok(atoms
         .into_iter()
-        .map(|(id, content)| CanvasNode {
-            id,
-            node_type: CanvasNodeType::Atom,
-            label: snippet_label(&content),
-            atom_count: 1,
-            children_ids: vec![],
-            dominant_tags: vec![],
-            centroid: None,
+        .map(|(id, content)| {
+            let tags = atom_tags.get(&id).cloned().unwrap_or_default();
+            CanvasNode {
+                id,
+                node_type: CanvasNodeType::Atom,
+                label: snippet_label(&content),
+                atom_count: 1,
+                children_ids: vec![],
+                dominant_tags: tags,
+                centroid: None,
+            }
         })
         .collect())
+}
+
+/// Batch lookup tag names for each atom (returns atom_id → vec of tag names)
+fn batch_lookup_atom_tags(
+    conn: &Connection,
+    atom_ids: &[String],
+) -> Result<HashMap<String, Vec<String>>, AtomicCoreError> {
+    if atom_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let query_and_collect = |stmt: &mut rusqlite::Statement, params: &[&dyn rusqlite::ToSql]| -> Result<HashMap<String, Vec<String>>, AtomicCoreError> {
+        let mut result: HashMap<String, Vec<String>> = HashMap::new();
+        let rows = stmt.query_map(params, |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (atom_id, tag_name) = row?;
+            result.entry(atom_id).or_default().push(tag_name);
+        }
+        Ok(result)
+    };
+
+    if atom_ids.len() <= MAX_SQL_VARS {
+        let placeholders = atom_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT at.atom_id, t.name FROM atom_tags at
+             JOIN tags t ON at.tag_id = t.id
+             WHERE at.atom_id IN ({})
+             ORDER BY t.name",
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = atom_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        return query_and_collect(&mut stmt, &params);
+    }
+
+    populate_temp_table(conn, "_canvas_atom_ids", atom_ids)?;
+    let mut stmt = conn.prepare(
+        "SELECT at.atom_id, t.name FROM atom_tags at
+         JOIN tags t ON at.tag_id = t.id
+         WHERE at.atom_id IN (SELECT id FROM _canvas_atom_ids)
+         ORDER BY t.name",
+    )?;
+    query_and_collect(&mut stmt, &[])
 }
 
 // ==================== Edge Computation ====================
@@ -1483,40 +1514,82 @@ mod tests {
         .unwrap();
     }
 
+    fn insert_semantic_edge(conn: &Connection, source: &str, target: &str, similarity: f32) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO semantic_edges (id, source_atom_id, target_atom_id, similarity_score, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, source, target, similarity, now],
+        )
+        .unwrap();
+    }
+
     #[test]
-    fn test_root_level_shows_categories() {
+    fn test_root_level_shows_clusters() {
         let (db, _temp) = create_test_db();
         let conn = db.conn.lock().unwrap();
 
         conn.execute("DELETE FROM tags", []).unwrap();
 
-        insert_tag(&conn, "cat1", "Topics", None);
-        insert_tag(&conn, "t1", "AI", Some("cat1"));
+        // Create atoms with semantic edges so they form a cluster
         insert_atom(&conn, "a1", "AI content");
-        tag_atom(&conn, "a1", "t1");
+        insert_atom(&conn, "a2", "ML content");
+        insert_atom(&conn, "a3", "Deep learning content");
+        insert_semantic_edge(&conn, "a1", "a2", 0.9);
+        insert_semantic_edge(&conn, "a2", "a3", 0.85);
+        insert_semantic_edge(&conn, "a1", "a3", 0.8);
 
         let level = get_canvas_level(&conn, None, None).unwrap();
         assert!(level.parent_id.is_none());
         assert!(!level.nodes.is_empty());
 
-        let topics = level.nodes.iter().find(|n| n.label == "Topics").unwrap();
-        assert_eq!(topics.node_type, CanvasNodeType::Category);
-        assert_eq!(topics.atom_count, 1);
+        // Should have a semantic cluster node containing all 3 atoms
+        let cluster = level
+            .nodes
+            .iter()
+            .find(|n| n.node_type == CanvasNodeType::SemanticCluster);
+        assert!(cluster.is_some());
+        assert_eq!(cluster.unwrap().atom_count, 3);
     }
 
     #[test]
-    fn test_root_level_shows_untagged() {
+    fn test_root_level_shows_unclustered_atoms() {
         let (db, _temp) = create_test_db();
         let conn = db.conn.lock().unwrap();
 
         conn.execute("DELETE FROM tags", []).unwrap();
 
-        insert_atom(&conn, "a1", "Untagged content");
+        // Single atom with no edges — should appear as individual atom node
+        insert_atom(&conn, "a1", "Lonely content");
 
         let level = get_canvas_level(&conn, None, None).unwrap();
-        let untagged = level.nodes.iter().find(|n| n.id == "untagged");
-        assert!(untagged.is_some());
-        assert_eq!(untagged.unwrap().atom_count, 1);
+        assert_eq!(level.nodes.len(), 1);
+        assert_eq!(level.nodes[0].node_type, CanvasNodeType::Atom);
+    }
+
+    #[test]
+    fn test_cluster_drilldown_shows_atoms() {
+        let (db, _temp) = create_test_db();
+        let conn = db.conn.lock().unwrap();
+
+        conn.execute("DELETE FROM tags", []).unwrap();
+
+        insert_atom(&conn, "a1", "AI content");
+        insert_atom(&conn, "a2", "ML content");
+        insert_atom(&conn, "a3", "Deep learning content");
+        insert_semantic_edge(&conn, "a1", "a2", 0.9);
+        insert_semantic_edge(&conn, "a2", "a3", 0.85);
+
+        // Drill into cluster with children_hint
+        let children = vec!["a1".to_string(), "a2".to_string(), "a3".to_string()];
+        let level = get_canvas_level(&conn, Some("cluster:0"), Some(children)).unwrap();
+        assert_eq!(level.parent_id.as_deref(), Some("cluster:0"));
+        assert_eq!(level.nodes.len(), 3);
+        assert!(level
+            .nodes
+            .iter()
+            .all(|n| n.node_type == CanvasNodeType::Atom));
     }
 
     #[test]
