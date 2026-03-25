@@ -3204,107 +3204,24 @@ fn build_neighborhood_graph(
 // ==================== Helper Functions ====================
 
 /// Strip image markdown from text: ![alt](url) -> empty
-fn strip_images_from_text(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '!' && chars.peek() == Some(&'[') {
-            chars.next(); // consume '['
-            let mut depth = 1;
-            while depth > 0 {
-                match chars.next() {
-                    Some('[') => depth += 1,
-                    Some(']') => depth -= 1,
-                    None => break,
-                    _ => {}
-                }
-            }
-            if chars.peek() == Some(&'(') {
-                chars.next();
-                let mut depth = 1;
-                while depth > 0 {
-                    match chars.next() {
-                        Some('(') => depth += 1,
-                        Some(')') => depth -= 1,
-                        None => break,
-                        _ => {}
-                    }
-                }
-            }
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
-/// Strip inline markdown from a single line: bold, italic, images, links, inline code.
+/// Strip inline markdown to plain text using pulldown-cmark.
+/// Extracts only text content, dropping images, links (keeps link text), and formatting.
 fn strip_inline_markdown(text: &str) -> String {
-    let text = text.replace("**", "").replace("__", "");
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let parser = Parser::new(text);
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '!' && chars.peek() == Some(&'[') {
-            // Image: ![alt](url) -> skip entirely
-            chars.next();
-            let mut depth = 1;
-            while depth > 0 {
-                match chars.next() {
-                    Some('[') => depth += 1,
-                    Some(']') => depth -= 1,
-                    None => break,
-                    _ => {}
-                }
-            }
-            if chars.peek() == Some(&'(') {
-                chars.next();
-                let mut depth = 1;
-                while depth > 0 {
-                    match chars.next() {
-                        Some('(') => depth += 1,
-                        Some(')') => depth -= 1,
-                        None => break,
-                        _ => {}
-                    }
-                }
-            }
-        } else if ch == '[' {
-            // Link: [text](url) -> text
-            let mut text_buf = String::new();
-            let mut depth = 1;
-            while depth > 0 {
-                match chars.next() {
-                    Some('[') => { depth += 1; text_buf.push('['); }
-                    Some(']') => { depth -= 1; if depth > 0 { text_buf.push(']'); } }
-                    Some(c) => text_buf.push(c),
-                    None => break,
-                }
-            }
-            if chars.peek() == Some(&'(') {
-                chars.next();
-                let mut depth = 1;
-                while depth > 0 {
-                    match chars.next() {
-                        Some('(') => depth += 1,
-                        Some(')') => depth -= 1,
-                        None => break,
-                        _ => {}
-                    }
-                }
-                let cleaned = strip_images_from_text(&text_buf);
-                out.push_str(cleaned.trim());
-            } else {
-                out.push('[');
-                out.push_str(&text_buf);
-                out.push(']');
-            }
-        } else if ch == '`' {
-            while let Some(c) = chars.next() {
-                if c == '`' { break; }
-                out.push(c);
-            }
-        } else {
-            out.push(ch);
+    let mut skip = false;
+
+    for event in parser {
+        match event {
+            Event::Text(t) if !skip => out.push_str(&t),
+            Event::Code(t) if !skip => out.push_str(&t),
+            Event::SoftBreak | Event::HardBreak if !skip => out.push(' '),
+            // Skip image alt text
+            Event::Start(Tag::Image { .. }) => skip = true,
+            Event::End(TagEnd::Image) => skip = false,
+            _ => {}
         }
     }
     out
