@@ -45,6 +45,8 @@ pub struct ProviderConfig {
     pub openrouter_api_key: Option<String>,
     pub openrouter_embedding_model: String,
     pub openrouter_llm_model: String,
+    /// User-specified context length override. None = use model default from API cache.
+    pub openrouter_context_length: Option<usize>,
     // Ollama settings
     pub ollama_host: String,
     pub ollama_embedding_model: String,
@@ -74,6 +76,8 @@ impl ProviderConfig {
             openrouter_llm_model: settings.get("tagging_model")
                 .cloned()
                 .unwrap_or_else(|| "openai/gpt-4o-mini".to_string()),
+            openrouter_context_length: settings.get("openrouter_context_length")
+                .and_then(|s| if s.is_empty() { None } else { s.parse().ok() }),
             ollama_host: settings.get("ollama_host")
                 .cloned()
                 .unwrap_or_else(|| "http://127.0.0.1:11434".to_string()),
@@ -143,13 +147,36 @@ impl ProviderConfig {
     }
 
     /// Get the context length (in tokens) for the current provider's LLM.
-    /// Returns None for OpenRouter (large/known context via API metadata),
-    /// Returns Some for Ollama and OpenAI-compatible providers with user-specified limits.
+    /// For OpenRouter: uses user override if set, otherwise looks up the model's
+    /// context length from the in-memory capabilities cache, falling back to None.
+    /// For Ollama/OpenAI-compat: uses the user-specified setting.
     pub fn context_length(&self) -> Option<usize> {
         match self.provider_type {
-            ProviderType::OpenRouter => None,
+            ProviderType::OpenRouter => {
+                if let Some(ctx) = self.openrouter_context_length {
+                    return Some(ctx);
+                }
+                // Fall back to model metadata from capabilities cache
+                let cache = CAPABILITIES_CACHE.inner.lock().ok()?;
+                cache.as_ref()?.context_lengths.get(&self.openrouter_llm_model).copied()
+            }
             ProviderType::Ollama => Some(self.ollama_context_length),
             ProviderType::OpenAICompat => Some(self.openai_compat_context_length),
+        }
+    }
+
+    /// Get the context length for a specific model (used when the active model
+    /// differs from the default LLM model, e.g. wiki_model or chat_model).
+    pub fn context_length_for_model(&self, model: &str) -> Option<usize> {
+        match self.provider_type {
+            ProviderType::OpenRouter => {
+                if let Some(ctx) = self.openrouter_context_length {
+                    return Some(ctx);
+                }
+                let cache = CAPABILITIES_CACHE.inner.lock().ok()?;
+                cache.as_ref()?.context_lengths.get(model).copied()
+            }
+            _ => self.context_length(),
         }
     }
 }

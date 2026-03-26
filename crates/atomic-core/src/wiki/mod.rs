@@ -60,7 +60,7 @@ impl WikiStrategyContext {
     /// For providers with a known context length, budgets ~60% for source material.
     /// Falls back to MAX_WIKI_SOURCE_TOKENS for providers with large/unknown context.
     pub fn max_source_tokens(&self) -> usize {
-        match self.provider_config.context_length() {
+        match self.provider_config.context_length_for_model(&self.wiki_model) {
             Some(ctx_len) => {
                 // Reserve ~40% for system prompt, output, and structured output framing
                 let budget = (ctx_len as f64 * 0.6) as usize;

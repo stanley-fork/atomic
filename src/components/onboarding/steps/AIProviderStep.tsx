@@ -256,6 +256,8 @@ export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
                     { value: '32768', label: '32K' },
                     { value: '65536', label: '64K' },
                     { value: '131072', label: '128K' },
+                    { value: '262144', label: '256K' },
+                    { value: '1000000', label: '1M' },
                   ]}
                 />
               </div>
@@ -359,6 +361,8 @@ export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
                   { value: '32768', label: '32K' },
                   { value: '65536', label: '64K' },
                   { value: '131072', label: '128K' },
+                  { value: '262144', label: '256K' },
+                  { value: '1000000', label: '1M' },
                 ]}
               />
             </div>

@@ -266,7 +266,7 @@ where
         // Truncate messages if they've grown beyond context window (from tool results)
         let call_messages = truncate_messages_to_context(
             ctx.messages.clone(),
-            provider_config.context_length(),
+            provider_config.context_length_for_model(&model),
         );
 
         let response = provider
@@ -505,7 +505,7 @@ where
     api_messages.extend(messages);
 
     // Truncate to fit context window for providers with limited context
-    let api_messages = truncate_messages_to_context(api_messages, provider_config.context_length());
+    let api_messages = truncate_messages_to_context(api_messages, provider_config.context_length_for_model(&model));
 
     // Create agent context
     let ctx = AgentContext {

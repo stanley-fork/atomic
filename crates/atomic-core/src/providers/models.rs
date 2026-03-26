@@ -14,6 +14,8 @@ pub struct ModelInfo {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
+    pub context_length: Option<usize>,
+    #[serde(default)]
     pub supported_parameters: Vec<String>,
 }
 
@@ -37,6 +39,9 @@ pub struct ModelCapabilitiesCache {
     pub models: HashMap<String, Vec<String>>,
     /// Map of model ID to display name
     pub model_names: HashMap<String, String>,
+    /// Map of model ID to context length (tokens)
+    #[serde(default)]
+    pub context_lengths: HashMap<String, usize>,
     /// Timestamp when cache was last updated (Unix seconds)
     pub updated_at: i64,
 }
@@ -97,14 +102,19 @@ pub async fn fetch_model_capabilities(client: &Client) -> Result<ModelCapabiliti
 
     let mut models = HashMap::new();
     let mut model_names = HashMap::new();
+    let mut context_lengths = HashMap::new();
     for model in models_response.data {
         model_names.insert(model.id.clone(), model.name.clone());
+        if let Some(ctx_len) = model.context_length {
+            context_lengths.insert(model.id.clone(), ctx_len);
+        }
         models.insert(model.id, model.supported_parameters);
     }
 
     Ok(ModelCapabilitiesCache {
         models,
         model_names,
+        context_lengths,
         updated_at: chrono::Utc::now().timestamp(),
     })
 }

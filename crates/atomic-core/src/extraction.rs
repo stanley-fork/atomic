@@ -139,8 +139,8 @@ const TAGGING_OVERHEAD_TOKENS: usize = 1500;
 
 /// Calculate max content chars based on provider context length.
 /// Returns a conservative limit that leaves room for system prompt, tag tree, and response.
-fn max_tagging_chars(provider_config: &ProviderConfig, tag_tree_json: &str) -> usize {
-    match provider_config.context_length() {
+fn max_tagging_chars(provider_config: &ProviderConfig, tag_tree_json: &str, model: &str) -> usize {
+    match provider_config.context_length_for_model(model) {
         Some(ctx_len) => {
             // Reserve tokens for: system prompt (~500), tag tree, response (~500)
             let tag_tree_tokens = tag_tree_json.len() / CHARS_PER_TOKEN;
@@ -164,7 +164,7 @@ pub async fn extract_tags_from_content(
     supported_params: Option<Vec<String>>,
 ) -> Result<ExtractionResult, String> {
     // Truncate based on provider's context length
-    let max_chars = max_tagging_chars(provider_config, tag_tree_json);
+    let max_chars = max_tagging_chars(provider_config, tag_tree_json, model);
     let text = if content.len() > max_chars {
         &content[..max_chars]
     } else {

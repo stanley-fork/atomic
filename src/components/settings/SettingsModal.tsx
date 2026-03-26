@@ -72,6 +72,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [testResult, setTestResult] = useState<'success' | 'error' | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
+  const [openrouterContextLength, setOpenrouterContextLength] = useState('');
+
   // OpenAI Compatible settings
   const [openaiCompatBaseUrl, setOpenaiCompatBaseUrl] = useState('');
   const [openaiCompatApiKey, setOpenaiCompatApiKey] = useState('');
@@ -457,6 +459,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     setTheme((settings.theme as Theme) || 'obsidian');
     setProvider(p || 'openrouter');
     setApiKey(settings.openrouter_api_key || '');
+    setOpenrouterContextLength(settings.openrouter_context_length || '');
     setAutoTaggingEnabled(settings.auto_tagging_enabled !== 'false');
     setEmbeddingModel(settings.embedding_model || 'openai/text-embedding-3-small');
     setTaggingModel(settings.tagging_model || 'openai/gpt-4o-mini');
@@ -941,6 +944,30 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             placeholder="Select chat model..."
                           />
                         </div>
+
+                        {/* Context Length */}
+                        <div className="space-y-1">
+                          <label className="block text-sm font-medium text-[var(--color-text-primary)]">
+                            Context Length
+                          </label>
+                          <p className="text-xs text-[var(--color-text-secondary)]">
+                            Override context window limit (default: use model's max)
+                          </p>
+                          <CustomSelect
+                            value={openrouterContextLength}
+                            onChange={(v) => { setOpenrouterContextLength(v); autoSave('openrouter_context_length', v); }}
+                            options={[
+                              { value: '', label: 'Model default' },
+                              { value: '8192', label: '8K' },
+                              { value: '16384', label: '16K' },
+                              { value: '32768', label: '32K' },
+                              { value: '65536', label: '64K' },
+                              { value: '131072', label: '128K' },
+                              { value: '262144', label: '256K' },
+                              { value: '1000000', label: '1M' },
+                            ]}
+                          />
+                        </div>
                       </div>
                     </>
                   )}
@@ -1033,6 +1060,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 { value: '32768', label: '32K' },
                                 { value: '65536', label: '64K' },
                                 { value: '131072', label: '128K' },
+                                { value: '262144', label: '256K' },
+                                { value: '1000000', label: '1M' },
                               ]}
                             />
                           </div>
@@ -1224,6 +1253,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                               { value: '32768', label: '32K' },
                               { value: '65536', label: '64K' },
                               { value: '131072', label: '128K' },
+                              { value: '262144', label: '256K' },
+                              { value: '1000000', label: '1M' },
                             ]}
                           />
                         </div>

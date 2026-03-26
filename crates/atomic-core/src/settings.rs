@@ -16,6 +16,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("ollama_embedding_model", "nomic-embed-text"),
     ("ollama_llm_model", "llama3.2"),
     ("ollama_context_length", "65536"),
+    ("openrouter_context_length", ""),
     ("embedding_model", "openai/text-embedding-3-small"),
     ("tagging_model", "openai/gpt-4o-mini"),
     ("wiki_model", "anthropic/claude-sonnet-4.5"),
