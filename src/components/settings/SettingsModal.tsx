@@ -79,7 +79,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [openaiCompatEmbeddingModel, setOpenaiCompatEmbeddingModel] = useState('');
   const [openaiCompatEmbeddingDimension, setOpenaiCompatEmbeddingDimension] = useState('1536');
   const [openaiCompatLlmModel, setOpenaiCompatLlmModel] = useState('');
-  const [openaiCompatContextLength, setOpenaiCompatContextLength] = useState('4096');
+  const [openaiCompatContextLength, setOpenaiCompatContextLength] = useState('65536');
   const [openaiCompatStatus, setOpenaiCompatStatus] = useState<'idle' | 'checking' | 'connected' | 'error'>('idle');
   const [openaiCompatError, setOpenaiCompatError] = useState<string | null>(null);
 
@@ -90,7 +90,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [ollamaModels, setOllamaModels] = useState<OllamaModel[]>([]);
   const [ollamaEmbeddingModel, setOllamaEmbeddingModel] = useState('nomic-embed-text');
   const [ollamaLlmModel, setOllamaLlmModel] = useState('llama3.2');
-  const [ollamaContextLength, setOllamaContextLength] = useState('8192');
+  const [ollamaContextLength, setOllamaContextLength] = useState('65536');
   const [isLoadingOllamaModels, setIsLoadingOllamaModels] = useState(false);
 
   // Common settings
@@ -466,13 +466,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     setOllamaHost(settings.ollama_host || 'http://127.0.0.1:11434');
     setOllamaEmbeddingModel(settings.ollama_embedding_model || 'nomic-embed-text');
     setOllamaLlmModel(settings.ollama_llm_model || 'llama3.2');
-    setOllamaContextLength(settings.ollama_context_length || '8192');
+    setOllamaContextLength(settings.ollama_context_length || '65536');
     setOpenaiCompatBaseUrl(settings.openai_compat_base_url || '');
     setOpenaiCompatApiKey(settings.openai_compat_api_key || '');
     setOpenaiCompatEmbeddingModel(settings.openai_compat_embedding_model || '');
     setOpenaiCompatEmbeddingDimension(settings.openai_compat_embedding_dimension || '1536');
     setOpenaiCompatLlmModel(settings.openai_compat_llm_model || '');
-    setOpenaiCompatContextLength(settings.openai_compat_context_length || '4096');
+    setOpenaiCompatContextLength(settings.openai_compat_context_length || '65536');
   }, [settings]);
 
   // Check Ollama connection when provider is ollama or host changes

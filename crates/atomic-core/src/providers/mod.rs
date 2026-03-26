@@ -85,7 +85,7 @@ impl ProviderConfig {
                 .unwrap_or_else(|| "llama3.2".to_string()),
             ollama_context_length: settings.get("ollama_context_length")
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(8192),
+                .unwrap_or(65536),
             openai_compat_base_url: settings.get("openai_compat_base_url")
                 .cloned()
                 .unwrap_or_default(),
@@ -103,7 +103,7 @@ impl ProviderConfig {
                 .unwrap_or(1536),
             openai_compat_context_length: settings.get("openai_compat_context_length")
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(4096),
+                .unwrap_or(65536),
         }
     }
 
