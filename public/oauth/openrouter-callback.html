@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><title>Connecting to OpenRouter...</title></head>
+<body>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (code && window.opener) {
+    window.opener.postMessage({ type: 'openrouter-oauth-callback', code }, window.location.origin);
+  }
+  window.close();
+</script>
+<p>Connecting to OpenRouter... This window should close automatically.</p>
+</body>
+</html>

@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import { Button } from '../../ui/Button';
 import { CustomSelect } from '../../ui/CustomSelect';
 import { SearchableSelect } from '../../ui/SearchableSelect';
@@ -11,6 +11,8 @@ import {
   getOllamaModels,
   type AvailableModel,
 } from '../../../lib/api';
+import { isDesktopApp } from '../../../lib/transport';
+import { generatePKCE, openOAuthPopup, exchangeCodeForKey } from '../../../lib/openrouter-oauth';
 import type { OnboardingState, OnboardingAction } from '../useOnboardingState';
 
 interface AIProviderStepProps {
@@ -20,6 +22,71 @@ interface AIProviderStepProps {
 
 export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
   const testOpenRouterConnection = useSettingsStore(s => s.testOpenRouterConnection);
+  const isDesktop = isDesktopApp();
+  const [oauthLoading, setOauthLoading] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+  const codeVerifierRef = useRef<string | null>(null);
+  const codeChallengeMethodRef = useRef<'S256' | 'plain'>('S256');
+
+  // Listen for OAuth callback message from popup
+  useEffect(() => {
+    if (state.provider !== 'openrouter' || isDesktop) return;
+
+    const handler = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type !== 'openrouter-oauth-callback') return;
+
+      const code = event.data.code;
+      const verifier = codeVerifierRef.current;
+      if (!code || !verifier) {
+        setOauthError('OAuth flow failed: missing code or verifier');
+        setOauthLoading(false);
+        return;
+      }
+
+      try {
+        const key = await exchangeCodeForKey(code, verifier, codeChallengeMethodRef.current);
+        dispatch({ type: 'SET_API_KEY', value: key });
+        // Auto-test the new key
+        dispatch({ type: 'SET_TESTING', value: true });
+        try {
+          await testOpenRouterConnection(key);
+          dispatch({ type: 'SET_TEST_RESULT', result: 'success' });
+        } catch (e) {
+          dispatch({ type: 'SET_TEST_RESULT', result: 'error', error: String(e) });
+        }
+        dispatch({ type: 'SET_TESTING', value: false });
+      } catch (e) {
+        setOauthError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setOauthLoading(false);
+        codeVerifierRef.current = null;
+      }
+    };
+
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [state.provider, isDesktop, dispatch, testOpenRouterConnection]);
+
+  const handleOAuthSignIn = async () => {
+    setOauthError(null);
+    setOauthLoading(true);
+    try {
+      const { codeVerifier, codeChallenge, codeChallengeMethod } = await generatePKCE();
+      codeVerifierRef.current = codeVerifier;
+      codeChallengeMethodRef.current = codeChallengeMethod;
+      const popup = openOAuthPopup(codeChallenge, codeChallengeMethod);
+      if (!popup) {
+        setOauthError('Popup blocked. Please allow popups for this site.');
+        setOauthLoading(false);
+        codeVerifierRef.current = null;
+      }
+    } catch (e) {
+      setOauthError(e instanceof Error ? e.message : String(e));
+      setOauthLoading(false);
+      codeVerifierRef.current = null;
+    }
+  };
 
   // Load OpenRouter models when provider is openrouter and we have a key
   useEffect(() => {
@@ -118,6 +185,30 @@ export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
 
       {state.provider === 'openrouter' && (
         <>
+          {/* OAuth sign-in (web only) */}
+          {!isDesktop && (
+            <div className="space-y-2">
+              <Button
+                onClick={handleOAuthSignIn}
+                disabled={oauthLoading || state.testResult === 'success'}
+                className="w-full"
+              >
+                {oauthLoading ? 'Waiting for OpenRouter...' : 'Sign in with OpenRouter'}
+              </Button>
+              {oauthError && (
+                <p className="text-sm text-red-500">{oauthError}</p>
+              )}
+              <div className="relative my-3">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-[var(--color-border)]" />
+                </div>
+                <div className="relative flex justify-center text-xs">
+                  <span className="px-2 bg-[var(--color-bg-panel)] text-[var(--color-text-secondary)]">or enter key manually</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* API Key */}
           <div className="space-y-2">
             <label className="block text-sm font-medium text-[var(--color-text-primary)]">API Key</label>
