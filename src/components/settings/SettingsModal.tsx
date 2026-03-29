@@ -262,6 +262,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [openaiCompatEmbeddingDimension, setOpenaiCompatEmbeddingDimension] = useState('1536');
   const [openaiCompatLlmModel, setOpenaiCompatLlmModel] = useState('');
   const [openaiCompatContextLength, setOpenaiCompatContextLength] = useState('65536');
+  const [openaiCompatTimeoutSecs, setOpenaiCompatTimeoutSecs] = useState('300');
   const [openaiCompatStatus, setOpenaiCompatStatus] = useState<'idle' | 'checking' | 'connected' | 'error'>('idle');
   const [openaiCompatError, setOpenaiCompatError] = useState<string | null>(null);
 
@@ -658,6 +659,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     setOpenaiCompatEmbeddingDimension(settings.openai_compat_embedding_dimension || '1536');
     setOpenaiCompatLlmModel(settings.openai_compat_llm_model || '');
     setOpenaiCompatContextLength(settings.openai_compat_context_length || '65536');
+    setOpenaiCompatTimeoutSecs(settings.openai_compat_timeout_secs || '300');
   }, [settings]);
 
   // Check Ollama connection when provider is ollama or host changes
@@ -1459,6 +1461,28 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                               { value: '131072', label: '128K' },
                               { value: '262144', label: '256K' },
                               { value: '1000000', label: '1M' },
+                            ]}
+                          />
+                        </div>
+
+                        {/* Timeout */}
+                        <div className="space-y-1">
+                          <label className="block text-sm font-medium text-[var(--color-text-primary)]">
+                            Request Timeout
+                          </label>
+                          <p className="text-xs text-[var(--color-text-secondary)]">
+                            Maximum time to wait for the server to respond
+                          </p>
+                          <CustomSelect
+                            value={openaiCompatTimeoutSecs}
+                            onChange={(v) => { setOpenaiCompatTimeoutSecs(v); autoSave('openai_compat_timeout_secs', v); }}
+                            options={[
+                              { value: '30', label: '30 seconds' },
+                              { value: '60', label: '60 seconds' },
+                              { value: '120', label: '2 minutes' },
+                              { value: '180', label: '3 minutes' },
+                              { value: '300', label: '5 minutes' },
+                              { value: '600', label: '10 minutes' },
                             ]}
                           />
                         </div>

@@ -476,6 +476,23 @@ export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
                 ]}
               />
             </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs text-[var(--color-text-secondary)]">Request Timeout</label>
+              <p className="text-xs text-[var(--color-text-secondary)]">Maximum time to wait for the server to respond</p>
+              <CustomSelect
+                value={state.openaiCompatTimeoutSecs}
+                onChange={(v) => dispatch({ type: 'SET_OPENAI_COMPAT_TIMEOUT_SECS', value: v })}
+                options={[
+                  { value: '30', label: '30 seconds' },
+                  { value: '60', label: '60 seconds' },
+                  { value: '120', label: '2 minutes' },
+                  { value: '180', label: '3 minutes' },
+                  { value: '300', label: '5 minutes' },
+                  { value: '600', label: '10 minutes' },
+                ]}
+              />
+            </div>
           </div>
         </>
       )}

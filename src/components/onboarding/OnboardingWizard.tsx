@@ -35,9 +35,13 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           return state.testResult === 'success';
         }
         if (state.provider === 'openai_compat') {
-          return state.openaiCompatStatus === 'connected';
+          return state.openaiCompatStatus === 'connected'
+            && !!state.openaiCompatEmbeddingModel
+            && !!state.openaiCompatLlmModel;
         }
-        return state.ollamaStatus === 'connected';
+        return state.ollamaStatus === 'connected'
+          && !!state.embeddingModel
+          && !!state.taggingModel;
       }
       default:
         return true; // Optional steps always allow proceeding
@@ -62,6 +66,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         await setSetting('ollama_embedding_model', state.embeddingModel);
         await setSetting('ollama_llm_model', state.taggingModel);
         await setSetting('ollama_context_length', state.ollamaContextLength);
+        await setSetting('ollama_timeout_secs', state.ollamaTimeoutSecs);
       } else if (state.provider === 'openai_compat') {
         await setSetting('openai_compat_base_url', state.openaiCompatBaseUrl);
         await setSetting('openai_compat_api_key', state.openaiCompatApiKey);
@@ -69,6 +74,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         await setSetting('openai_compat_embedding_dimension', state.openaiCompatEmbeddingDimension);
         await setSetting('openai_compat_llm_model', state.openaiCompatLlmModel);
         await setSetting('openai_compat_context_length', state.openaiCompatContextLength);
+        await setSetting('openai_compat_timeout_secs', state.openaiCompatTimeoutSecs);
       }
 
       await setSetting('auto_tagging_enabled', state.autoTaggingEnabled ? 'true' : 'false');

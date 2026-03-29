@@ -23,9 +23,10 @@ pub struct OpenAICompatProvider {
 }
 
 impl OpenAICompatProvider {
-    pub fn new(base_url: String, api_key: Option<String>) -> Self {
+    pub fn new(base_url: String, api_key: Option<String>, timeout_secs: Option<u64>) -> Self {
+        let timeout = Duration::from_secs(timeout_secs.unwrap_or(300));
         let client = Client::builder()
-            .timeout(Duration::from_secs(300))
+            .timeout(timeout)
             .build()
             .unwrap_or_else(|_| Client::new());
 

@@ -29,6 +29,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("openai_compat_llm_model", ""),
     ("openai_compat_embedding_dimension", "1536"),
     ("openai_compat_context_length", "65536"),
+    ("openai_compat_timeout_secs", "300"), // 5 minutes default for OpenAI-compatible servers
 ];
 
 /// Migrate settings - add any missing default settings

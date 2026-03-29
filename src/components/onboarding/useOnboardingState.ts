@@ -45,6 +45,7 @@ export interface OnboardingState {
   openaiCompatEmbeddingDimension: string;
   openaiCompatLlmModel: string;
   openaiCompatContextLength: string;
+  openaiCompatTimeoutSecs: string;
   openaiCompatStatus: 'idle' | 'checking' | 'connected' | 'error';
   openaiCompatError: string | null;
 
@@ -98,6 +99,7 @@ export type OnboardingAction =
   | { type: 'SET_OPENAI_COMPAT_EMBEDDING_DIMENSION'; value: string }
   | { type: 'SET_OPENAI_COMPAT_LLM_MODEL'; value: string }
   | { type: 'SET_OPENAI_COMPAT_CONTEXT_LENGTH'; value: string }
+  | { type: 'SET_OPENAI_COMPAT_TIMEOUT_SECS'; value: string }
   | { type: 'SET_OPENAI_COMPAT_STATUS'; status: 'idle' | 'checking' | 'connected' | 'error'; error?: string }
   // Mobile
   | { type: 'SET_MOBILE_TOKEN'; token: string | null }
@@ -142,6 +144,7 @@ const initialState: OnboardingState = {
   openaiCompatEmbeddingDimension: '1536',
   openaiCompatLlmModel: '',
   openaiCompatContextLength: '65536',
+  openaiCompatTimeoutSecs: '300',
   openaiCompatStatus: 'idle',
   openaiCompatError: null,
   mobileToken: null,
@@ -171,8 +174,17 @@ function reducer(state: OnboardingState, action: OnboardingAction): OnboardingSt
       return { ...state, serverTestResult: action.result, serverTestError: action.error || null };
     case 'SET_TESTING_SERVER':
       return { ...state, isTestingServer: action.value };
-    case 'SET_PROVIDER':
-      return { ...state, provider: action.value, testResult: null, testError: null };
+    case 'SET_PROVIDER': {
+      const base = { ...state, provider: action.value, testResult: null, testError: null };
+      if (action.value === 'ollama') {
+        base.embeddingModel = '';
+        base.taggingModel = '';
+      } else if (action.value === 'openrouter') {
+        base.embeddingModel = 'openai/text-embedding-3-small';
+        base.taggingModel = 'openai/gpt-4o-mini';
+      }
+      return base;
+    }
     case 'SET_API_KEY':
       return { ...state, apiKey: action.value, testResult: null, testError: null };
     case 'SET_EMBEDDING_MODEL':
@@ -217,6 +229,8 @@ function reducer(state: OnboardingState, action: OnboardingAction): OnboardingSt
       return { ...state, openaiCompatLlmModel: action.value };
     case 'SET_OPENAI_COMPAT_CONTEXT_LENGTH':
       return { ...state, openaiCompatContextLength: action.value };
+    case 'SET_OPENAI_COMPAT_TIMEOUT_SECS':
+      return { ...state, openaiCompatTimeoutSecs: action.value };
     case 'SET_OPENAI_COMPAT_STATUS':
       return { ...state, openaiCompatStatus: action.status, openaiCompatError: action.error || null };
     case 'SET_MOBILE_TOKEN':

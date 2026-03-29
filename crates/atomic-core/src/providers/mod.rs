@@ -60,6 +60,7 @@ pub struct ProviderConfig {
     pub openai_compat_llm_model: String,
     pub openai_compat_embedding_dimension: usize,
     pub openai_compat_context_length: usize,
+    pub openai_compat_timeout_secs: u64,
 }
 
 impl ProviderConfig {
@@ -112,6 +113,9 @@ impl ProviderConfig {
             openai_compat_context_length: settings.get("openai_compat_context_length")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(65536),
+            openai_compat_timeout_secs: settings.get("openai_compat_timeout_secs")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(300), // Default 5 minutes
         }
     }
 
@@ -203,6 +207,7 @@ pub fn create_embedding_provider(config: &ProviderConfig) -> Result<Arc<dyn Embe
             Ok(Arc::new(OpenAICompatProvider::new(
                 config.openai_compat_base_url.clone(),
                 config.openai_compat_api_key.clone(),
+                Some(config.openai_compat_timeout_secs),
             )))
         }
     }
@@ -226,6 +231,7 @@ pub fn create_llm_provider(config: &ProviderConfig) -> Result<Arc<dyn LlmProvide
             Ok(Arc::new(OpenAICompatProvider::new(
                 config.openai_compat_base_url.clone(),
                 config.openai_compat_api_key.clone(),
+                Some(config.openai_compat_timeout_secs),
             )))
         }
     }
@@ -249,6 +255,7 @@ pub fn create_streaming_llm_provider(config: &ProviderConfig) -> Result<Arc<dyn 
             Ok(Arc::new(OpenAICompatProvider::new(
                 config.openai_compat_base_url.clone(),
                 config.openai_compat_api_key.clone(),
+                Some(config.openai_compat_timeout_secs),
             )))
         }
     }
