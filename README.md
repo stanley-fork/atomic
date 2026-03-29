@@ -1,5 +1,10 @@
-# Atomic
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/images/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/images/logo.svg">
+  <img alt="Atomic" src="./docs/images/logo.svg" width="300">
+</picture>
 
+[![Desktop App](https://img.shields.io/github/v/release/kenforthewin/atomic?label=desktop&logo=github)](https://github.com/kenforthewin/atomic/releases/latest)
 [![Server Image](https://img.shields.io/github/v/tag/kenforthewin/atomic?label=server&logo=docker)](https://github.com/kenforthewin/atomic/pkgs/container/atomic-server)
 [![Web Image](https://img.shields.io/github/v/tag/kenforthewin/atomic?label=web&logo=docker)](https://github.com/kenforthewin/atomic/pkgs/container/atomic-web)
 
@@ -9,9 +14,13 @@ Atomic stores knowledge as **atoms** — markdown notes that are automatically c
 
 ![Canvas View](./docs/images/canvas.png)
 
+![Atom Viewer](./docs/images/atom.png)
+
 ![Wiki Synthesis](./docs/images/wiki.png)
 
 ![Chat Interface](./docs/images/chat.png)
+
+![Semantic Search](./docs/images/search.png)
 
 ## Features
 
