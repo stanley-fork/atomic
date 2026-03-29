@@ -5,6 +5,7 @@ members = [
     "crates/atomic-core",
     "crates/atomic-server",
     "crates/mcp-bridge",
+    "crates/atomic-cloud",
 ]
 
 [profile.release]

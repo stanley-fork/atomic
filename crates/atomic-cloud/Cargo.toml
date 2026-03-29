@@ -1,0 +1,46 @@
+[package]
+name = "atomic-cloud"
+version = "0.1.0"
+edition = "2021"
+description = "Management plane for Atomic managed hosting"
+license = "MIT"
+
+[[bin]]
+name = "atomic-cloud"
+path = "src/main.rs"
+
+[dependencies]
+# Web framework
+actix-web = "4.9"
+actix-cors = "0.7"
+actix-files = "0.6"
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
+futures = "0.3"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+
+# HTTP client (Stripe + Fly APIs)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+
+# Crypto (Stripe webhook verification)
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+# Error handling
+thiserror = "1"
