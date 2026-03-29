@@ -30,10 +30,19 @@ impl OpenAICompatProvider {
             .build()
             .unwrap_or_else(|_| Client::new());
 
+        // Normalize the base URL to always end with /v1 so callers can provide
+        // either "http://host:port" or "http://host:port/v1" and both work.
+        let trimmed = base_url.trim_end_matches('/').to_string();
+        let base_url = if trimmed.ends_with("/v1") {
+            trimmed
+        } else {
+            format!("{}/v1", trimmed)
+        };
+
         Self {
             client,
             api_key,
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url,
         }
     }
 

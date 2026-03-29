@@ -22,3 +22,6 @@ fly.toml
 ios/AtomicMobile.xcodeproj/
 ios/DerivedData/
 ios/build/
+
+# Claude Code
+.claude/
