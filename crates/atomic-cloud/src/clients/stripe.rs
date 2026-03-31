@@ -123,6 +123,32 @@ impl StripeClient {
             .ok_or_else(|| CloudError::Stripe("No URL in portal session response".into()))
     }
 
+    /// Cancel a Stripe subscription immediately (triggers a prorated refund)
+    pub async fn cancel_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> Result<(), CloudError> {
+        let url = format!(
+            "https://api.stripe.com/v1/subscriptions/{}",
+            subscription_id
+        );
+
+        let resp = self
+            .http
+            .delete(&url)
+            .basic_auth(&self.secret_key, None::<&str>)
+            .send()
+            .await
+            .map_err(|e| CloudError::Stripe(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CloudError::Stripe(format!("Cancel subscription failed: {body}")));
+        }
+
+        Ok(())
+    }
+
     /// Verify a Stripe webhook signature and parse the event payload.
     ///
     /// See: https://docs.stripe.com/webhooks/signatures

@@ -155,7 +155,7 @@ pub async fn get_instance_by_customer_id(
     customer_id: Uuid,
 ) -> Result<Option<Instance>, CloudError> {
     sqlx::query_as::<_, Instance>(
-        "SELECT * FROM instances WHERE customer_id = $1 AND status != 'destroyed' ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM instances WHERE customer_id = $1 AND status NOT IN ('destroyed', 'failed') ORDER BY created_at DESC LIMIT 1",
     )
     .bind(customer_id)
     .fetch_optional(pool)

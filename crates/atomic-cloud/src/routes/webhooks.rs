@@ -70,7 +70,8 @@ async fn handle_checkout_completed(
         .ok_or_else(|| CloudError::BadRequest("Missing customer in checkout session".into()))?;
     let email = session["customer_email"]
         .as_str()
-        .ok_or_else(|| CloudError::BadRequest("Missing email in checkout session".into()))?;
+        .ok_or_else(|| CloudError::BadRequest("Missing email in checkout session".into()))?
+        .to_lowercase();
     let stripe_subscription_id = session["subscription"]
         .as_str()
         .ok_or_else(|| CloudError::BadRequest("Missing subscription in checkout session".into()))?;
@@ -79,7 +80,7 @@ async fn handle_checkout_completed(
         .ok_or_else(|| CloudError::BadRequest("Missing subdomain in checkout metadata".into()))?;
 
     // Upsert customer
-    let customer = crate::db::upsert_customer(&state.db, stripe_customer_id, email).await?;
+    let customer = crate::db::upsert_customer(&state.db, stripe_customer_id, &email).await?;
 
     // Create subscription record
     let subscription = crate::db::upsert_subscription(
@@ -98,8 +99,8 @@ async fn handle_checkout_completed(
     // Each customer gets their own Fly app: atomic-{subdomain}
     let fly_app_name = format!("atomic-{subdomain}");
 
-    // Create instance record
-    let instance = crate::db::create_instance(
+    // Create instance record — if subdomain or customer conflict, cancel and refund
+    let instance = match crate::db::create_instance(
         &state.db,
         customer.id,
         subscription.id,
@@ -107,7 +108,17 @@ async fn handle_checkout_completed(
         &fly_app_name,
         &management_token,
     )
-    .await?;
+    .await
+    {
+        Ok(i) => i,
+        Err(_) => {
+            eprintln!("Instance conflict for {subdomain}, canceling subscription {stripe_subscription_id}");
+            let _ = state.stripe.cancel_subscription(stripe_subscription_id).await;
+            return Err(CloudError::Conflict(
+                "Subdomain or account conflict — subscription canceled and refunded".into(),
+            ));
+        }
+    };
 
     // Spawn async provisioning task
     let fly = Arc::clone(&state.fly);
