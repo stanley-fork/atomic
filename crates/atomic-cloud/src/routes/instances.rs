@@ -52,7 +52,6 @@ pub async fn get_status(state: web::Data<CloudState>, req: HttpRequest) -> HttpR
         "fly_state": fly_state,
         "subdomain_url": subdomain_url,
         "mcp_url": mcp_url,
-        "instance_auth_token": instance.instance_auth_token,
         "created_at": instance.created_at,
     }))
 }

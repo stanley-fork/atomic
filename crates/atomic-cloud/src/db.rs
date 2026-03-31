@@ -217,17 +217,15 @@ pub async fn update_instance_fly_ids(
     instance_id: Uuid,
     fly_machine_id: &str,
     fly_volume_id: &str,
-    instance_auth_token: &str,
 ) -> Result<(), CloudError> {
     sqlx::query(
         r#"
-        UPDATE instances SET fly_machine_id = $1, fly_volume_id = $2, instance_auth_token = $3, updated_at = now()
-        WHERE id = $4
+        UPDATE instances SET fly_machine_id = $1, fly_volume_id = $2, updated_at = now()
+        WHERE id = $3
         "#,
     )
     .bind(fly_machine_id)
     .bind(fly_volume_id)
-    .bind(instance_auth_token)
     .bind(instance_id)
     .execute(pool)
     .await

@@ -213,9 +213,6 @@ export default function Dashboard() {
           <div className="space-y-3">
             <EndpointInfo label="Instance URL" url={instance.subdomain_url} />
             <EndpointInfo label="MCP Endpoint" url={instance.mcp_url} />
-            {instance.instance_auth_token && (
-              <EndpointInfo label="Auth Token" url={instance.instance_auth_token} />
-            )}
           </div>
         </div>
 

@@ -191,7 +191,6 @@ impl FlyClient {
         image: &str,
         volume_id: &str,
         region: &str,
-        auth_token: &str,
     ) -> Result<FlyMachine, CloudError> {
         let url = format!("{}/apps/{}/machines", FLY_API_BASE, app_name);
 
@@ -202,7 +201,6 @@ impl FlyClient {
                 "image": image,
                 "env": {
                     "ATOMIC_STORAGE": "sqlite",
-                    "ATOMIC_DEFAULT_TOKEN": auth_token,
                 },
                 "guest": {
                     "cpu_kind": "shared",

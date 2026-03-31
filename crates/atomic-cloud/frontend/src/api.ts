@@ -58,7 +58,6 @@ export interface InstanceStatus {
   fly_state: string | null;
   subdomain_url: string;
   mcp_url: string;
-  instance_auth_token: string | null;
   created_at: string;
 }
 

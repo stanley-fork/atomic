@@ -171,16 +171,13 @@ async fn provision_instance(
         .create_volume(app_name, &volume_name, 3, region)
         .await?;
 
-    // Step 5: Generate a default auth token for the customer's atomic-server instance
-    let instance_auth_token = Uuid::new_v4().to_string();
-
-    // Step 6: Create machine
+    // Step 4: Create machine
     let machine = fly
-        .create_machine(app_name, subdomain, image, &volume.id, region, &instance_auth_token)
+        .create_machine(app_name, subdomain, image, &volume.id, region)
         .await?;
 
     // Update instance with Fly IDs
-    crate::db::update_instance_fly_ids(db, instance_id, &machine.id, &volume.id, &instance_auth_token).await?;
+    crate::db::update_instance_fly_ids(db, instance_id, &machine.id, &volume.id).await?;
     crate::db::update_instance_status(db, instance_id, "running").await?;
 
     eprintln!("Provisioned {subdomain}: app={app_name}, machine={}, volume={}", machine.id, volume.id);
