@@ -1125,6 +1125,7 @@ impl AtomicCore {
 
     /// Compute PCA 2D projection of all atom embeddings and return positioned atoms,
     /// top-K edges per atom, and cluster centroid labels.
+    /// Pure read operation — does not persist positions to the database.
     /// Works with both SQLite and Postgres backends via storage dispatch.
     pub fn compute_and_get_canvas_data(&self) -> Result<GlobalCanvasData, AtomicCoreError> {
         // Load all average embeddings via storage abstraction
@@ -1141,22 +1142,27 @@ impl AtomicCore {
             .map(|(id, x, y)| (id.clone(), (*x, *y)))
             .collect();
 
-        // Save positions via storage abstraction
-        let positions: Vec<AtomPosition> = projected.iter().map(|(id, x, y)| {
-            AtomPosition { atom_id: id.clone(), x: *x, y: *y }
-        }).collect();
-        self.storage.save_atom_positions_impl(&positions)?;
-
-        // Load atom metadata via storage abstraction
-        let mut atoms = self.storage.get_canvas_atom_metadata_sync()?;
-
-        // Merge tag IDs
+        // Load atom metadata and merge with projected positions
+        let atoms_with_embeddings = self.storage.get_atoms_with_embeddings_impl()?;
         let mut atom_tag_map = self.storage.get_all_atom_tag_ids_sync()?;
-        for atom in &mut atoms {
-            if let Some(ids) = atom_tag_map.remove(&atom.atom_id) {
-                atom.tag_ids = ids;
-            }
-        }
+
+        let atoms: Vec<CanvasAtomPosition> = atoms_with_embeddings.iter()
+            .filter_map(|awe| {
+                let (x, y) = position_map.get(&awe.atom.atom.id)?;
+                let (title, _) = extract_title_and_snippet(&awe.atom.atom.content, 60);
+                let primary_tag = awe.atom.tags.first().map(|t| t.name.clone());
+                let tag_ids = atom_tag_map.remove(&awe.atom.atom.id).unwrap_or_default();
+                Some(CanvasAtomPosition {
+                    atom_id: awe.atom.atom.id.clone(),
+                    x: *x,
+                    y: *y,
+                    title,
+                    primary_tag,
+                    tag_count: awe.atom.tags.len() as i32,
+                    tag_ids,
+                })
+            })
+            .collect();
 
         // Load top-2 semantic edges per atom
         let edges = self.storage.get_top_k_canvas_edges_sync(2)?;
