@@ -98,7 +98,10 @@ pub trait AtomStore: Send + Sync {
     /// Get all average embeddings as (atom_id, embedding) pairs for PCA projection.
     async fn get_all_embedding_pairs(&self) -> StorageResult<Vec<(String, Vec<f32>)>>;
 
-    /// Get top-K strongest semantic edges per atom for canvas visualization.
+    /// Get semantic edges for canvas visualization, keeping at least top-K per atom.
+    /// An edge is kept if either endpoint has fewer than top_k edges so far,
+    /// which guarantees every atom gets its strongest connections but allows
+    /// hubs to exceed top_k.
     async fn get_top_k_canvas_edges(&self, top_k: usize) -> StorageResult<Vec<CanvasEdgeData>>;
 
     /// Get all atom-to-tag-id mappings in batch.
