@@ -9,6 +9,7 @@ import { useSettingsStore } from '../../stores/settings';
 import { useAtomsStore } from '../../stores/atoms';
 import { useTagsStore } from '../../stores/tags';
 import { THEMES, Theme } from '../../hooks/useTheme';
+import { FONTS, Font } from '../../hooks/useFont';
 import {
   getAvailableLlmModels,
   testOllamaConnection,
@@ -242,8 +243,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const setSetting = useSettingsStore(s => s.setSetting);
   const testOpenRouterConnection = useSettingsStore(s => s.testOpenRouterConnection);
 
-  // Theme
+  // Theme & Font
   const [theme, setTheme] = useState<Theme>('obsidian');
+  const [font, setFont] = useState<Font>('ibm-plex-sans');
 
   // Provider selection
   const [provider, setProvider] = useState<'openrouter' | 'ollama' | 'openai_compat'>('openrouter');
@@ -653,6 +655,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   useEffect(() => {
     const p = settings.provider as 'openrouter' | 'ollama' | 'openai_compat' | undefined;
     setTheme((settings.theme as Theme) || 'obsidian');
+    setFont((settings.font as Font) || 'ibm-plex-sans');
     setProvider(p || 'openrouter');
     setApiKey(settings.openrouter_api_key || '');
     setOpenrouterContextLength(settings.openrouter_context_length || '');
@@ -938,6 +941,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     />
                   </div>
 
+                  {/* Font Selector */}
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-[var(--color-text-primary)]">
+                      Font
+                    </label>
+                    <CustomSelect
+                      value={font}
+                      onChange={(v) => { setFont(v as Font); autoSave('font', v); }}
+                      options={FONTS}
+                    />
+                  </div>
+
                   {/* Auto-tagging Toggle Section */}
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
@@ -1013,8 +1028,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       value={provider}
                       onChange={(v) => handleProviderChange(v as 'openrouter' | 'ollama' | 'openai_compat')}
                       options={[
-                        { value: 'openrouter', label: 'OpenRouter (Cloud)' },
-                        { value: 'ollama', label: 'Ollama (Local)' },
+                        { value: 'openrouter', label: 'OpenRouter' },
+                        { value: 'ollama', label: 'Ollama' },
                         { value: 'openai_compat', label: 'OpenAI Compatible' },
                       ]}
                     />

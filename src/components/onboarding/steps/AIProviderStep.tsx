@@ -176,8 +176,8 @@ export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
           value={state.provider}
           onChange={(v) => dispatch({ type: 'SET_PROVIDER', value: v as 'openrouter' | 'ollama' | 'openai_compat' })}
           options={[
-            { value: 'openrouter', label: 'OpenRouter (Cloud)' },
-            { value: 'ollama', label: 'Ollama (Local)' },
+            { value: 'openrouter', label: 'OpenRouter' },
+            { value: 'ollama', label: 'Ollama' },
             { value: 'openai_compat', label: 'OpenAI Compatible' },
           ]}
         />

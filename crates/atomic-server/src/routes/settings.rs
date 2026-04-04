@@ -33,9 +33,28 @@ pub async fn set_setting(
     let dimension_keys = ["provider", "embedding_model", "ollama_embedding_model", "openai_compat_embedding_model", "openai_compat_embedding_dimension"];
     if dimension_keys.contains(&key.as_str()) {
         let core = db.0;
+        let manager = state.manager.clone();
+        let active_id = state.manager.active_id().unwrap_or_default();
         let on_event = crate::event_bridge::embedding_event_callback(state.event_tx.clone());
         match web::block(move || {
-            core.set_setting_with_reembed(&key, &value, on_event)
+            let result = core.set_setting_with_reembed(&key, &value, on_event);
+            // If dimension changed, also recreate vector indexes on all other databases.
+            // Best-effort: failures here must not override the already-successful result.
+            if let Ok((true, _)) = &result {
+                match core.get_settings() {
+                    Ok(current_settings) => {
+                        let config = atomic_core::providers::ProviderConfig::from_settings(&current_settings);
+                        let new_dim = config.embedding_dimension();
+                        if let Err(e) = manager.recreate_other_vector_indexes(new_dim, &active_id) {
+                            tracing::error!("Failed to recreate vector indexes on other databases: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to get settings for dimension calc: {}", e);
+                    }
+                }
+            }
+            result
         }).await {
             Ok(Ok((changed, count))) => HttpResponse::Ok().json(serde_json::json!({
                 "dimension_changed": changed,
@@ -108,7 +127,15 @@ pub async fn test_openai_compat_connection(
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
-    let mut req = client.get(format!("{}/models", body.base_url));
+    // Normalize URL the same way OpenAICompatProvider does
+    let trimmed = body.base_url.trim_end_matches('/');
+    let base_url = if trimmed.ends_with("/v1") {
+        trimmed.to_string()
+    } else {
+        format!("{}/v1", trimmed)
+    };
+
+    let mut req = client.get(format!("{}/models", base_url));
 
     if let Some(ref api_key) = body.api_key {
         if !api_key.is_empty() {

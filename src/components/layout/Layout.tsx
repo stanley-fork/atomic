@@ -10,13 +10,14 @@ import { CommandPalette } from '../command-palette';
 import { useAtomsStore } from '../../stores/atoms';
 import { useTagsStore } from '../../stores/tags';
 import { useUIStore } from '../../stores/ui';
-import { useTheme } from '../../hooks';
+import { useTheme, useFont } from '../../hooks';
 import { verifyProviderConfigured } from '../../lib/api';
 import { isTauri } from '../../lib/platform';
 
 
 export function Layout() {
   useTheme(); // Initialize theme
+  useFont(); // Initialize font
   const fetchAtoms = useAtomsStore(s => s.fetchAtoms);
   const fetchTags = useTagsStore(s => s.fetchTags);
   const [isSetupRequired, setIsSetupRequired] = useState<boolean | null>(null); // null = checking

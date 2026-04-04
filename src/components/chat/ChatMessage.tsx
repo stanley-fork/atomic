@@ -145,7 +145,7 @@ export function ChatMessage({ message, isStreaming = false, onViewAtom, searchQu
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-[var(--color-accent-light)] hover:underline"
+        className="underline underline-offset-2 decoration-[var(--color-border-hover)] hover:decoration-current transition-colors"
       >
         {processChildren(children)}
       </a>

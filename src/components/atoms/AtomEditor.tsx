@@ -129,7 +129,7 @@ export function AtomEditor({ atomId, onClose, onSaved }: AtomEditorProps) {
       backgroundColor: 'var(--color-bg-hover)',
     },
     '.cm-scroller': {
-      fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+      fontFamily: 'var(--font-mono)',
     },
   });
 

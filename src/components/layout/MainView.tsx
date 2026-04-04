@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useEffect, useRef } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { AtomGrid } from '../atoms/AtomGrid';
 import { AtomList } from '../atoms/AtomList';
@@ -19,6 +19,10 @@ export function MainView() {
   const semanticSearchQuery = useAtomsStore(s => s.semanticSearchQuery);
   const retryEmbedding = useAtomsStore(s => s.retryEmbedding);
   const retryTagging = useAtomsStore(s => s.retryTagging);
+  const sourceFilter = useAtomsStore(s => s.sourceFilter);
+  const sourceValue = useAtomsStore(s => s.sourceValue);
+  const sortBy = useAtomsStore(s => s.sortBy);
+  const sortOrder = useAtomsStore(s => s.sortOrder);
   const search = useAtomsStore(s => s.search);
   const clearSemanticSearch = useAtomsStore(s => s.clearSemanticSearch);
 
@@ -35,6 +39,9 @@ export function MainView() {
   const openChatDrawer = useUIStore(s => s.openChatDrawer);
   const openWikiListDrawer = useUIStore(s => s.openWikiListDrawer);
   const openCommandPalette = useUIStore(s => s.openCommandPalette);
+
+  const [filterBarOpen, setFilterBarOpen] = useState(false);
+  const hasActiveFilter = sourceFilter !== 'all' || !!sourceValue || sortBy !== 'updated' || sortOrder !== 'desc';
 
   // Debounced server-side search when searchQuery changes
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -262,11 +269,29 @@ export function MainView() {
         {/* Drag region - fills available space */}
         <div data-tauri-drag-region className="flex-1 h-full drag-region" />
 
-        {/* Atom count — hide for canvas mode */}
+        {/* Filter toggle + atom count — right-aligned, hide for canvas */}
         {viewMode !== 'canvas' && (
-          <span className="text-sm text-[var(--color-text-secondary)] shrink-0">
-            {displayCount} atom{displayCount !== 1 ? 's' : ''}
-          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setFilterBarOpen(!filterBarOpen)}
+              className={`relative p-1.5 rounded-md transition-colors ${
+                filterBarOpen || hasActiveFilter
+                  ? 'text-[var(--color-accent-light)] hover:text-[var(--color-accent)]'
+                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
+              }`}
+              title="Filter & sort"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+              {hasActiveFilter && !filterBarOpen && (
+                <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-[var(--color-accent)] rounded-full" />
+              )}
+            </button>
+            <span className="text-sm text-[var(--color-text-secondary)]">
+              {displayCount} atom{displayCount !== 1 ? 's' : ''}
+            </span>
+          </div>
         )}
       </div>
 
@@ -283,8 +308,8 @@ export function MainView() {
         </div>
       )}
 
-      {/* Filter bar - visible for grid/list views when not searching */}
-      {!isSemanticSearch && viewMode !== 'canvas' && <FilterBar />}
+      {/* Filter bar - visible for grid/list views when toggled open */}
+      {!isSemanticSearch && viewMode !== 'canvas' && filterBarOpen && <FilterBar />}
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
