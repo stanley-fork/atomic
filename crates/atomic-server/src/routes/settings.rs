@@ -37,8 +37,10 @@ pub async fn set_setting(
         let active_id = state.manager.active_id().unwrap_or_default();
         let on_event = crate::event_bridge::embedding_event_callback(state.event_tx.clone());
         match web::block(move || {
-            let result = core.set_setting_with_reembed(&key, &value, on_event);
-            // If dimension changed, also recreate vector indexes on all other databases.
+            let result = core.set_setting_with_reembed(&key, &value, on_event.clone());
+            // If dimension changed, also recreate vector indexes on all other databases
+            // AND enqueue their atoms for re-embedding. Without the second step those
+            // atoms get reset to `pending` but never actually run through the pipeline.
             // Best-effort: failures here must not override the already-successful result.
             if let Ok((true, _)) = &result {
                 match core.get_settings() {
@@ -47,6 +49,40 @@ pub async fn set_setting(
                         let new_dim = config.embedding_dimension();
                         if let Err(e) = manager.recreate_other_vector_indexes(new_dim, &active_id) {
                             tracing::error!("Failed to recreate vector indexes on other databases: {}", e);
+                        } else {
+                            // Enqueue re-embedding for every non-active database.
+                            match manager.list_databases() {
+                                Ok((dbs, _)) => {
+                                    for db_info in dbs {
+                                        if db_info.id == active_id {
+                                            continue;
+                                        }
+                                        match manager.get_core(&db_info.id) {
+                                            Ok(other_core) => {
+                                                match other_core.spawn_reembed_pending(on_event.clone()) {
+                                                    Ok(n) => tracing::info!(
+                                                        db_id = %db_info.id,
+                                                        db_name = %db_info.name,
+                                                        queued = n,
+                                                        "Queued re-embedding for non-active database"
+                                                    ),
+                                                    Err(e) => tracing::error!(
+                                                        db_id = %db_info.id,
+                                                        "Failed to queue re-embedding: {}",
+                                                        e
+                                                    ),
+                                                }
+                                            }
+                                            Err(e) => tracing::error!(
+                                                db_id = %db_info.id,
+                                                "Failed to load core for re-embed: {}",
+                                                e
+                                            ),
+                                        }
+                                    }
+                                }
+                                Err(e) => tracing::error!("Failed to list databases for re-embed: {}", e),
+                            }
                         }
                     }
                     Err(e) => {

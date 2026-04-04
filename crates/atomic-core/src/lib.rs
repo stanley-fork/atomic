@@ -922,6 +922,42 @@ impl AtomicCore {
         Ok(())
     }
 
+    /// Claim atoms currently marked `pending`/`processing` and spawn a background
+    /// task to re-embed them (with tagging skipped — existing tags are preserved).
+    /// Returns the number of atoms queued. Used after a dimension change to
+    /// re-embed each database's content.
+    pub fn spawn_reembed_pending<F>(&self, on_event: F) -> Result<i32, AtomicCoreError>
+    where
+        F: Fn(EmbeddingEvent) + Send + Sync + Clone + 'static,
+    {
+        let pending_atoms = self.storage.claim_pending_reembedding_sync()?;
+        let count = pending_atoms.len() as i32;
+
+        if count > 0 {
+            let storage_clone = self.storage.clone();
+            let bg_settings = self.settings_for_background();
+            executor::spawn(async move {
+                match bg_settings {
+                    Some(s) => embedding::process_embedding_batch_with_settings(
+                        storage_clone,
+                        pending_atoms,
+                        true, // skip tagging - re-embedding only
+                        on_event,
+                        s,
+                    ).await,
+                    None => embedding::process_embedding_batch(
+                        storage_clone,
+                        pending_atoms,
+                        true,
+                        on_event,
+                    ).await,
+                };
+            });
+        }
+
+        Ok(count)
+    }
+
     /// Re-embed all atoms in the database
     pub fn reembed_all_atoms<F>(&self, on_event: F) -> Result<i32, AtomicCoreError>
     where
@@ -1344,31 +1380,7 @@ impl AtomicCore {
 
         let mut pending_count = 0i32;
         if dimension_changed {
-            pending_count = self.storage.count_pending_embeddings_sync()?;
-
-            if pending_count > 0 {
-                let pending_atoms = self.storage.claim_pending_reembedding_sync()?;
-
-                let storage_clone = self.storage.clone();
-                let bg_settings = self.settings_for_background();
-                executor::spawn(async move {
-                    match bg_settings {
-                        Some(s) => embedding::process_embedding_batch_with_settings(
-                            storage_clone,
-                            pending_atoms,
-                            true,
-                            on_event,
-                            s,
-                        ).await,
-                        None => embedding::process_embedding_batch(
-                            storage_clone,
-                            pending_atoms,
-                            true, // skip tagging - re-embedding only
-                            on_event,
-                        ).await,
-                    };
-                });
-            }
+            pending_count = self.spawn_reembed_pending(on_event)?;
         }
 
         Ok((dimension_changed, pending_count))
