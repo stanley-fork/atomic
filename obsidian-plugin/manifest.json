@@ -1,0 +1,9 @@
+{
+  "id": "atomic",
+  "name": "Atomic",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Connect your vault to an Atomic knowledge base for semantic search, live sync, and AI-generated wiki articles.",
+  "author": "Atomic",
+  "isDesktopOnly": false
+}

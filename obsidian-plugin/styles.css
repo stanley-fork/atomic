@@ -1,0 +1,105 @@
+/* Atomic Plugin Styles */
+
+/* Search modal */
+.atomic-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.atomic-search-title {
+  font-weight: 600;
+}
+
+.atomic-search-snippet {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atomic-search-score {
+  font-size: 0.75em;
+  color: var(--text-faint);
+}
+
+/* Similar notes view */
+.atomic-similar-container {
+  padding: 8px;
+}
+
+.atomic-similar-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.atomic-similar-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.atomic-similar-title {
+  font-weight: 500;
+}
+
+.atomic-similar-score {
+  font-size: 0.8em;
+  color: var(--text-muted);
+}
+
+.atomic-similar-chunk {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Wiki view */
+.atomic-wiki-container {
+  padding: 16px;
+}
+
+.atomic-wiki-tag-select {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.atomic-wiki-content {
+  line-height: 1.6;
+}
+
+.atomic-wiki-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 32px 16px;
+}
+
+/* Status bar */
+.atomic-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.atomic-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.atomic-status-dot.connected {
+  background: var(--color-green);
+}
+
+.atomic-status-dot.disconnected {
+  background: var(--color-red);
+}

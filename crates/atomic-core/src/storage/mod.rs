@@ -207,6 +207,8 @@ dispatch! {
         => sqlite: check_existing_source_urls_sync, pg_trait: AtomStore, pg_method: check_existing_source_urls;
     fn source_url_exists_sync(&self, url: &str) -> Result<bool, AtomicCoreError>
         => sqlite: source_url_exists_sync, pg_trait: AtomStore, pg_method: source_url_exists;
+    fn get_atom_by_source_url_sync(&self, url: &str) -> Result<Option<AtomWithTags>, AtomicCoreError>
+        => sqlite: get_atom_by_source_url_sync, pg_trait: AtomStore, pg_method: get_atom_by_source_url;
     fn count_pending_embeddings_sync(&self) -> Result<i32, AtomicCoreError>
         => sqlite: count_pending_embeddings_sync, pg_trait: AtomStore, pg_method: count_pending_embeddings;
     fn get_all_embedding_pairs_sync(&self) -> Result<Vec<(String, Vec<f32>)>, AtomicCoreError>

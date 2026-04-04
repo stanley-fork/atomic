@@ -117,6 +117,37 @@ pub async fn get_atom(db: Db, path: web::Path<String>) -> HttpResponse {
     }
 }
 
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct GetAtomBySourceUrlQuery {
+    /// The source URL to look up
+    pub url: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/atoms/by-source-url",
+    params(GetAtomBySourceUrlQuery),
+    responses(
+        (status = 200, description = "Atom found", body = AtomWithTags),
+        (status = 404, description = "No atom with this source URL", body = ApiErrorResponse),
+    ),
+    tag = "atoms",
+)]
+pub async fn get_atom_by_source_url(
+    db: Db,
+    query: web::Query<GetAtomBySourceUrlQuery>,
+) -> HttpResponse {
+    let url = query.into_inner().url;
+    let core = db.0;
+    match web::block(move || core.get_atom_by_source_url(&url)).await {
+        Ok(Ok(Some(atom))) => HttpResponse::Ok().json(atom),
+        Ok(Ok(None)) => HttpResponse::NotFound().json(serde_json::json!({"error": "No atom found with this source URL"})),
+        Ok(Err(e)) => crate::error::error_response(e),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": e.to_string()})),
+    }
+}
+
 #[derive(Deserialize, Serialize, ToSchema)]
 pub struct CreateAtomRequest {
     /// Markdown content of the atom

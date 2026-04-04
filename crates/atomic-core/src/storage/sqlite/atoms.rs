@@ -802,6 +802,25 @@ impl SqliteStorage {
         Ok(exists)
     }
 
+    pub(crate) fn get_atom_by_source_url_sync(&self, url: &str) -> StorageResult<Option<AtomWithTags>> {
+        let conn = self.db.read_conn()?;
+
+        let atom_result = conn.query_row(
+            &format!("SELECT {} FROM atoms WHERE source_url = ?1", ATOM_COLUMNS),
+            [url],
+            atom_from_row,
+        );
+
+        match atom_result {
+            Ok(atom) => {
+                let tags = get_tags_for_atom(&conn, &atom.id)?;
+                Ok(Some(AtomWithTags { atom, tags }))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(AtomicCoreError::Database(e)),
+        }
+    }
+
     pub(crate) fn count_pending_embeddings_sync(&self) -> StorageResult<i32> {
         let conn = self.db.read_conn()?;
         let count: i32 = conn
@@ -989,6 +1008,10 @@ impl AtomStore for SqliteStorage {
 
     async fn source_url_exists(&self, url: &str) -> StorageResult<bool> {
         self.source_url_exists_sync(url)
+    }
+
+    async fn get_atom_by_source_url(&self, url: &str) -> StorageResult<Option<AtomWithTags>> {
+        self.get_atom_by_source_url_sync(url)
     }
 
     async fn count_pending_embeddings(&self) -> StorageResult<i32> {

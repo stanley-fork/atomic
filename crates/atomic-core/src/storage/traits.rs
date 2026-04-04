@@ -92,6 +92,9 @@ pub trait AtomStore: Send + Sync {
     /// Check if a specific source URL already exists.
     async fn source_url_exists(&self, url: &str) -> StorageResult<bool>;
 
+    /// Get an atom by its source URL. Returns None if not found.
+    async fn get_atom_by_source_url(&self, url: &str) -> StorageResult<Option<AtomWithTags>>;
+
     /// Count atoms with pending embedding status.
     async fn count_pending_embeddings(&self) -> StorageResult<i32>;
 

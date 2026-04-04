@@ -424,6 +424,11 @@ impl AtomicCore {
         self.storage.get_atom_impl(id)
     }
 
+    /// Get an atom by its source URL
+    pub fn get_atom_by_source_url(&self, url: &str) -> Result<Option<AtomWithTags>, AtomicCoreError> {
+        self.storage.get_atom_by_source_url_sync(url)
+    }
+
     /// Create a new atom and trigger embedding generation
     ///
     /// The `on_event` callback will be invoked with progress events during

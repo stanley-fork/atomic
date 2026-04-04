@@ -50,6 +50,10 @@ export const COMMAND_MAP: Record<string, CommandSpec> = {
     method: 'GET',
     path: (a) => `/api/atoms/${encodeURIComponent(a.id as string)}`,
   },
+  get_atom_by_source_url: {
+    method: 'GET',
+    path: (a) => `/api/atoms/by-source-url?url=${encodeURIComponent(a.url as string)}`,
+  },
   get_atom_by_id: {
     method: 'GET',
     path: (a) => `/api/atoms/${encodeURIComponent(a.id as string)}`,

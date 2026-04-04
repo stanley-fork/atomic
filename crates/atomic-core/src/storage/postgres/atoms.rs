@@ -962,6 +962,34 @@ impl AtomStore for PostgresStorage {
         Ok(exists.unwrap_or(false))
     }
 
+    async fn get_atom_by_source_url(&self, url: &str) -> StorageResult<Option<AtomWithTags>> {
+        let row: Option<(
+            String, String, String, String,
+            Option<String>, Option<String>, Option<String>,
+            String, String, String, String,
+        )> = sqlx::query_as(
+            "SELECT id, content, title, snippet, source_url, source, published_at,
+                    created_at, updated_at,
+                    COALESCE(embedding_status, 'pending'),
+                    COALESCE(tagging_status, 'pending')
+             FROM atoms WHERE source_url = $1 AND db_id = $2",
+        )
+        .bind(url)
+        .bind(&self.db_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
+
+        match row {
+            Some(r) => {
+                let atom = Self::atom_from_tuple(r);
+                let tags = self.tags_for_atom(&atom.id).await?;
+                Ok(Some(AtomWithTags { atom, tags }))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn count_pending_embeddings(&self) -> StorageResult<i32> {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM atoms WHERE embedding_status = 'pending' AND db_id = $1",

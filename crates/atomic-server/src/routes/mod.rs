@@ -28,6 +28,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/atoms", web::post().to(atoms::create_atom));
     cfg.route("/atoms/bulk", web::post().to(atoms::bulk_create_atoms));
     cfg.route("/atoms/sources", web::get().to(atoms::get_source_list));
+    cfg.route("/atoms/by-source-url", web::get().to(atoms::get_atom_by_source_url));
     cfg.route("/atoms/{id}", web::get().to(atoms::get_atom));
     cfg.route("/atoms/{id}", web::put().to(atoms::update_atom));
     cfg.route("/atoms/{id}", web::delete().to(atoms::delete_atom));
