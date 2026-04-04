@@ -160,6 +160,12 @@ pub async fn test_openai_compat_connection(
     }
 }
 
+#[utoipa::path(get, path = "/api/settings/embedding-models", responses((status = 200, description = "Curated OpenRouter embedding models with dimensions")), tag = "settings")]
+pub async fn get_openrouter_embedding_models() -> HttpResponse {
+    let models = atomic_core::providers::openrouter::models::get_embedding_models();
+    HttpResponse::Ok().json(models)
+}
+
 #[utoipa::path(get, path = "/api/settings/models", responses((status = 200, description = "Available LLM models")), tag = "settings")]
 pub async fn get_available_llm_models(db: Db) -> HttpResponse {
     use atomic_core::providers::models::fetch_and_return_capabilities;

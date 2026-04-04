@@ -6,10 +6,12 @@ import { ConnectionStatus } from '../../ui/ConnectionStatus';
 import { useSettingsStore } from '../../../stores/settings';
 import {
   getAvailableLlmModels,
+  getOpenRouterEmbeddingModels,
   testOllamaConnection,
   testOpenAICompatConnection,
   getOllamaModels,
   type AvailableModel,
+  type OpenRouterEmbeddingModel,
 } from '../../../lib/api';
 import { isDesktopApp } from '../../../lib/transport';
 import { generatePKCE, openOAuthPopup, exchangeCodeForKey } from '../../../lib/openrouter-oauth';
@@ -27,6 +29,7 @@ export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
   const [oauthError, setOauthError] = useState<string | null>(null);
   const codeVerifierRef = useRef<string | null>(null);
   const codeChallengeMethodRef = useRef<'S256' | 'plain'>('S256');
+  const [openrouterEmbeddingModels, setOpenrouterEmbeddingModels] = useState<OpenRouterEmbeddingModel[]>([]);
 
   // Listen for OAuth callback message from popup
   useEffect(() => {
@@ -98,6 +101,15 @@ export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
         .finally(() => dispatch({ type: 'SET_LOADING_MODELS', value: false }));
     }
   }, [state.provider, state.testResult, state.availableModels.length, dispatch]);
+
+  // Load curated OpenRouter embedding model registry
+  useEffect(() => {
+    if (state.provider === 'openrouter' && state.testResult === 'success' && openrouterEmbeddingModels.length === 0) {
+      getOpenRouterEmbeddingModels()
+        .then(models => setOpenrouterEmbeddingModels(models))
+        .catch(err => console.error('Failed to load embedding models:', err));
+    }
+  }, [state.provider, state.testResult, openrouterEmbeddingModels.length]);
 
   // Check Ollama connection when provider is ollama
   const checkOllamaConnection = useCallback(async (host: string) => {
@@ -242,13 +254,14 @@ export function AIProviderStep({ state, dispatch }: AIProviderStepProps) {
 
               <div className="space-y-2">
                 <label className="block text-xs text-[var(--color-text-secondary)]">Embedding Model</label>
-                <CustomSelect
+                <SearchableSelect
                   value={state.embeddingModel}
                   onChange={(v) => dispatch({ type: 'SET_EMBEDDING_MODEL', value: v })}
-                  options={[
-                    { value: 'openai/text-embedding-3-small', label: 'text-embedding-3-small (recommended)' },
-                    { value: 'openai/text-embedding-3-large', label: 'text-embedding-3-large' },
-                  ]}
+                  options={openrouterEmbeddingModels.map(m => ({
+                    id: m.id,
+                    name: `${m.name} (${m.dimension})`,
+                  }))}
+                  placeholder="Select embedding model..."
                 />
               </div>
 

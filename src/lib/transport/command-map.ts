@@ -245,6 +245,10 @@ export const COMMAND_MAP: Record<string, CommandSpec> = {
     method: 'GET',
     path: '/api/settings/models',
   },
+  get_openrouter_embedding_models: {
+    method: 'GET',
+    path: '/api/settings/embedding-models',
+  },
   test_openai_compat_connection: {
     method: 'POST',
     path: '/api/settings/test-openai-compat',

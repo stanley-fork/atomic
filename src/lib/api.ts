@@ -284,6 +284,18 @@ export async function getAvailableLlmModels(): Promise<AvailableModel[]> {
   return getTransport().invoke('get_available_llm_models');
 }
 
+// OpenRouter embedding model registry (curated list with known vector dimensions)
+export interface OpenRouterEmbeddingModel {
+  id: string;
+  name: string;
+  dimension: number;
+  context_length: number;
+}
+
+export async function getOpenRouterEmbeddingModels(): Promise<OpenRouterEmbeddingModel[]> {
+  return getTransport().invoke('get_openrouter_embedding_models');
+}
+
 // Ollama types and commands
 export interface OllamaModel {
   id: string;

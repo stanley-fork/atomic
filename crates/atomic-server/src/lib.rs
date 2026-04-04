@@ -62,6 +62,7 @@ pub use utoipa_scalar::{Scalar, Servable};
         routes::settings::test_openrouter_connection,
         routes::settings::test_openai_compat_connection,
         routes::settings::get_available_llm_models,
+        routes::settings::get_openrouter_embedding_models,
         // Embeddings
         routes::embedding::process_pending_embeddings,
         routes::embedding::process_pending_tagging,

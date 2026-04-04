@@ -2,6 +2,7 @@
 
 mod embedding;
 mod llm;
+pub mod models;
 
 use crate::providers::error::ProviderError;
 use crate::providers::traits::{

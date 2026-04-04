@@ -141,11 +141,8 @@ impl ProviderConfig {
     pub fn embedding_dimension(&self) -> usize {
         match self.provider_type {
             ProviderType::OpenRouter => {
-                match self.openrouter_embedding_model.as_str() {
-                    "openai/text-embedding-3-small" => 1536,
-                    "openai/text-embedding-3-large" => 3072,
-                    _ => 1536, // Default
-                }
+                openrouter::models::get_embedding_dimension(&self.openrouter_embedding_model)
+                    .unwrap_or(1536) // Fall back to 1536 for unknown models
             }
             ProviderType::Ollama => {
                 ollama::get_embedding_dimension(&self.ollama_embedding_model)
