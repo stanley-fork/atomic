@@ -70,6 +70,9 @@ pub trait AtomStore: Send + Sync {
     /// Get embedding status for a specific atom.
     async fn get_embedding_status(&self, atom_id: &str) -> StorageResult<String>;
 
+    /// Get tagging status for a specific atom.
+    async fn get_tagging_status(&self, atom_id: &str) -> StorageResult<String>;
+
     /// Get all atom canvas positions.
     async fn get_atom_positions(&self) -> StorageResult<Vec<AtomPosition>>;
 

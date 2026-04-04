@@ -193,6 +193,8 @@ dispatch! {
         => sqlite: get_source_list_impl, pg_trait: AtomStore, pg_method: get_source_list;
     fn get_embedding_status_impl(&self, atom_id: &str) -> Result<String, AtomicCoreError>
         => sqlite: get_embedding_status_impl, pg_trait: AtomStore, pg_method: get_embedding_status;
+    fn get_tagging_status_impl(&self, atom_id: &str) -> Result<String, AtomicCoreError>
+        => sqlite: get_tagging_status_impl, pg_trait: AtomStore, pg_method: get_tagging_status;
     fn get_atom_positions_impl(&self) -> Result<Vec<AtomPosition>, AtomicCoreError>
         => sqlite: get_atom_positions_impl, pg_trait: AtomStore, pg_method: get_atom_positions;
     fn save_atom_positions_impl(&self, positions: &[AtomPosition]) -> Result<(), AtomicCoreError>

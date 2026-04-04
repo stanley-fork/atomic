@@ -380,6 +380,16 @@ async fn process_tagging_only_inner(
     atom_id: &str,
     external_settings: Option<HashMap<String, String>>,
 ) -> Result<(Vec<String>, Vec<String>), String> {
+    // Respect atoms that were intentionally marked 'skipped' (e.g. by a
+    // dimension-change reset that preserves existing tags) or already
+    // 'complete'. Only 'pending'/'failed' atoms should actually run tagging.
+    let current_status = storage
+        .get_tagging_status_impl(atom_id)
+        .map_err(|e| e.to_string())?;
+    if current_status == "skipped" || current_status == "complete" {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
     // Set tagging status to processing
     storage.set_tagging_status_sync(atom_id, "processing")
         .map_err(|e| e.to_string())?;
@@ -1138,25 +1148,20 @@ where
     let count = pending_atoms.len() as i32;
 
     if count > 0 {
-        // Process batch asynchronously on the shared background runtime.
-        // skip_tagging=true: this entry point is for embedding recovery only.
-        // Tagging has its own separate recovery path (process_pending_tagging)
-        // which respects per-atom tagging_status. Running tagging here would
-        // re-tag atoms that were intentionally marked 'skipped' (e.g. by a
-        // dimension-change reset, where existing tags should be preserved).
+        // Process batch asynchronously on the shared background runtime
         crate::executor::spawn(async move {
             match external_settings {
                 Some(s) => process_embedding_batch_with_settings(
                     storage,
                     pending_atoms,
-                    true,
+                    false,
                     on_event,
                     s,
                 ).await,
                 None => process_embedding_batch(
                     storage,
                     pending_atoms,
-                    true,
+                    false,
                     on_event,
                 ).await,
             };

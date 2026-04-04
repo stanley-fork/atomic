@@ -668,6 +668,18 @@ impl SqliteStorage {
         Ok(status)
     }
 
+    pub(crate) fn get_tagging_status_impl(&self, atom_id: &str) -> StorageResult<String> {
+        let conn = self.db.read_conn()?;
+
+        let status: String = conn.query_row(
+            "SELECT COALESCE(tagging_status, 'pending') FROM atoms WHERE id = ?1",
+            [atom_id],
+            |row| row.get(0),
+        )?;
+
+        Ok(status)
+    }
+
     pub(crate) fn get_atom_positions_impl(&self) -> StorageResult<Vec<AtomPosition>> {
         let conn = self.db.read_conn()?;
 
@@ -980,6 +992,10 @@ impl AtomStore for SqliteStorage {
 
     async fn get_embedding_status(&self, atom_id: &str) -> StorageResult<String> {
         self.get_embedding_status_impl(atom_id)
+    }
+
+    async fn get_tagging_status(&self, atom_id: &str) -> StorageResult<String> {
+        self.get_tagging_status_impl(atom_id)
     }
 
     async fn get_atom_positions(&self) -> StorageResult<Vec<AtomPosition>> {

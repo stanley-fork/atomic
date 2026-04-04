@@ -805,6 +805,19 @@ impl AtomStore for PostgresStorage {
         Ok(status)
     }
 
+    async fn get_tagging_status(&self, atom_id: &str) -> StorageResult<String> {
+        let status: String = sqlx::query_scalar(
+            "SELECT COALESCE(tagging_status, 'pending') FROM atoms WHERE id = $1 AND db_id = $2",
+        )
+        .bind(atom_id)
+        .bind(&self.db_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
+
+        Ok(status)
+    }
+
     async fn get_atom_positions(&self) -> StorageResult<Vec<AtomPosition>> {
         let rows: Vec<(String, f64, f64)> =
             sqlx::query_as("SELECT atom_id, x, y FROM atom_positions WHERE db_id = $1")
