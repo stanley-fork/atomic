@@ -68,6 +68,17 @@ impl StorageBackend {
         }
     }
 
+    /// Get pipeline status (embedding counts + failed atoms).
+    pub(crate) fn get_pipeline_status(&self) -> Result<crate::models::PipelineStatus, AtomicCoreError> {
+        match self {
+            StorageBackend::Sqlite(s) => s.get_pipeline_status_sync(),
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(_) => Err(AtomicCoreError::DatabaseOperation(
+                "Pipeline status not yet implemented for Postgres".to_string(),
+            )),
+        }
+    }
+
     /// Get the database path (for display).
     pub(crate) fn storage_path(&self) -> &std::path::Path {
         match self {
@@ -257,14 +268,16 @@ dispatch! {
         => sqlite: count_atoms_with_tags_impl, pg_trait: TagStore, pg_method: count_atoms_with_tags;
 
     // ---- ChunkStore ----
-    fn set_embedding_status_sync(&self, atom_id: &str, status: &str) -> Result<(), AtomicCoreError>
+    fn set_embedding_status_sync(&self, atom_id: &str, status: &str, error: Option<&str>) -> Result<(), AtomicCoreError>
         => sqlite: set_embedding_status_sync, pg_trait: ChunkStore, pg_method: set_embedding_status;
-    fn set_tagging_status_sync(&self, atom_id: &str, status: &str) -> Result<(), AtomicCoreError>
+    fn set_tagging_status_sync(&self, atom_id: &str, status: &str, error: Option<&str>) -> Result<(), AtomicCoreError>
         => sqlite: set_tagging_status_sync, pg_trait: ChunkStore, pg_method: set_tagging_status;
     fn save_chunks_and_embeddings_sync(&self, atom_id: &str, chunks: &[(String, Vec<f32>)]) -> Result<(), AtomicCoreError>
         => sqlite: save_chunks_and_embeddings_sync, pg_trait: ChunkStore, pg_method: save_chunks_and_embeddings;
     fn reset_stuck_processing_sync(&self) -> Result<i32, AtomicCoreError>
         => sqlite: reset_stuck_processing_sync, pg_trait: ChunkStore, pg_method: reset_stuck_processing;
+    fn reset_failed_embeddings_sync(&self) -> Result<i32, AtomicCoreError>
+        => sqlite: reset_failed_embeddings_sync, pg_trait: ChunkStore, pg_method: reset_failed_embeddings;
     fn rebuild_semantic_edges_sync(&self) -> Result<i32, AtomicCoreError>
         => sqlite: rebuild_semantic_edges_sync, pg_trait: ChunkStore, pg_method: rebuild_semantic_edges;
     fn get_semantic_edges_sync(&self, min_similarity: f32) -> Result<Vec<SemanticEdge>, AtomicCoreError>

@@ -43,13 +43,17 @@ pub enum EmbeddingEvent {
 pub async fn generate_embeddings_with_config(
     config: &ProviderConfig,
     texts: &[String],
-) -> Result<Vec<Vec<f32>>, String> {
-    let provider = get_embedding_provider(config).map_err(|e| e.to_string())?;
+) -> Result<Vec<Vec<f32>>, EmbedError> {
+    let provider = get_embedding_provider(config).map_err(|e| EmbedError {
+        message: e.to_string(),
+        retryable: false,
+    })?;
     let embed_config = EmbeddingConfig::new(config.embedding_model());
     let model = config.embedding_model();
     let provider_type = format!("{:?}", config.provider_type);
 
     let mut last_error = String::new();
+    let mut last_retryable = true;
     for attempt in 0..3u32 {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
@@ -59,7 +63,8 @@ pub async fn generate_embeddings_with_config(
             Ok(embeddings) => return Ok(embeddings),
             Err(e) => {
                 last_error = e.to_string();
-                if e.is_retryable() {
+                last_retryable = e.is_retryable();
+                if last_retryable {
                     tracing::warn!(
                         attempt = attempt + 1,
                         model = %model,
@@ -83,7 +88,18 @@ pub async fn generate_embeddings_with_config(
         }
     }
 
-    Err(last_error)
+    Err(EmbedError {
+        message: last_error,
+        retryable: last_retryable,
+    })
+}
+
+/// Error from embedding generation with retryability info
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct EmbedError {
+    pub message: String,
+    pub retryable: bool,
 }
 
 /// Maximum texts per embedding API call for cross-atom batching.
@@ -160,16 +176,29 @@ fn embed_batch_adaptive(
             (results, vec![])
         }
         Err(e) => {
-            if batch.len() == 1 {
-                // Single chunk failed — mark atom as failed
-                tracing::error!(
-                    atom_id = %batch[0].atom_id,
-                    chunk_index = batch[0].chunk_index,
-                    error = %e,
-                    "Single chunk embedding failed after retries"
-                );
-                let failed_id = batch[0].atom_id.clone();
-                (vec![], vec![(failed_id, e)])
+            if batch.len() == 1 || !e.retryable {
+                // Non-retryable or single chunk: fail all chunks in the batch
+                if !e.retryable && batch.len() > 1 {
+                    tracing::error!(
+                        batch_size = batch.len(),
+                        error = %e.message,
+                        "Non-retryable embedding error, failing entire batch"
+                    );
+                } else {
+                    tracing::error!(
+                        atom_id = %batch[0].atom_id,
+                        chunk_index = batch[0].chunk_index,
+                        error = %e.message,
+                        "Single chunk embedding failed after retries"
+                    );
+                }
+                let failed: Vec<_> = batch.iter()
+                    .map(|c| (c.atom_id.clone(), e.message.clone()))
+                    .collect();
+                // dedup by atom_id
+                let mut seen = std::collections::HashSet::new();
+                let failed = failed.into_iter().filter(|(id, _)| seen.insert(id.clone())).collect();
+                (vec![], failed)
             } else {
                 // Split in half and retry each half
                 let mid = batch.len() / 2;
@@ -263,7 +292,7 @@ async fn process_embedding_only_inner(
     external_settings: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     // Set embedding status to processing
-    storage.set_embedding_status_sync(atom_id, "processing")
+    storage.set_embedding_status_sync(atom_id, "processing", None)
         .map_err(|e| e.to_string())?;
 
     // Get settings for embeddings (from registry if provided, otherwise from data db)
@@ -291,9 +320,9 @@ async fn process_embedding_only_inner(
 
     if chunks.is_empty() {
         // No chunks to process, mark embedding as complete, tagging as skipped
-        storage.set_embedding_status_sync(atom_id, "complete")
+        storage.set_embedding_status_sync(atom_id, "complete", None)
             .map_err(|e| e.to_string())?;
-        storage.set_tagging_status_sync(atom_id, "skipped")
+        storage.set_tagging_status_sync(atom_id, "skipped", None)
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -302,7 +331,7 @@ async fn process_embedding_only_inner(
     let chunk_texts: Vec<String> = chunks.iter().map(|s| s.to_string()).collect();
     let embeddings = generate_embeddings_with_config(&provider_config, &chunk_texts)
         .await
-        .map_err(|e| format!("Failed to generate embeddings: {}", e))?;
+        .map_err(|e| format!("Failed to generate embeddings: {}", e.message))?;
 
     // Store chunks and embeddings
     let chunks_with_embeddings: Vec<(String, Vec<f32>)> = chunks
@@ -343,7 +372,7 @@ async fn process_embedding_only_inner(
     }
 
     // Set embedding status to complete
-    storage.set_embedding_status_sync(atom_id, "complete")
+    storage.set_embedding_status_sync(atom_id, "complete", None)
         .map_err(|e| e.to_string())?;
 
     Ok(())
@@ -391,7 +420,7 @@ async fn process_tagging_only_inner(
     }
 
     // Set tagging status to processing
-    storage.set_tagging_status_sync(atom_id, "processing")
+    storage.set_tagging_status_sync(atom_id, "processing", None)
         .map_err(|e| e.to_string())?;
 
     // Get settings (from registry if provided, otherwise from data db)
@@ -405,7 +434,7 @@ async fn process_tagging_only_inner(
         .unwrap_or(true);
 
     if !auto_tagging_enabled {
-        storage.set_tagging_status_sync(atom_id, "skipped")
+        storage.set_tagging_status_sync(atom_id, "skipped", None)
             .map_err(|e| e.to_string())?;
         return Ok((Vec::new(), Vec::new()));
     }
@@ -416,7 +445,7 @@ async fn process_tagging_only_inner(
     if provider_config.provider_type == ProviderType::OpenRouter
         && provider_config.openrouter_api_key.is_none()
     {
-        storage.set_tagging_status_sync(atom_id, "skipped")
+        storage.set_tagging_status_sync(atom_id, "skipped", None)
             .map_err(|e| e.to_string())?;
         return Ok((Vec::new(), Vec::new()));
     }
@@ -429,7 +458,7 @@ async fn process_tagging_only_inner(
         .ok_or_else(|| format!("Atom not found: {}", atom_id))?;
 
     if content.trim().is_empty() {
-        storage.set_tagging_status_sync(atom_id, "skipped")
+        storage.set_tagging_status_sync(atom_id, "skipped", None)
             .map_err(|e| e.to_string())?;
         return Ok((Vec::new(), Vec::new()));
     }
@@ -484,7 +513,7 @@ async fn process_tagging_only_inner(
     }
 
     // Set tagging status to complete
-    storage.set_tagging_status_sync(atom_id, "complete")
+    storage.set_tagging_status_sync(atom_id, "complete", None)
         .map_err(|e| e.to_string())?;
 
     all_tag_ids.sort();
@@ -551,7 +580,7 @@ where
                     new_tags_created,
                 },
                 Err(e) => {
-                    storage.set_tagging_status_sync(&atom_id, "failed").ok();
+                    storage.set_tagging_status_sync(&atom_id, "failed", Some(&e)).ok();
                     EmbeddingEvent::TaggingFailed {
                         atom_id: atom_id.clone(),
                         error: e,
@@ -625,7 +654,7 @@ pub fn spawn_embedding_task_single_with_settings<F>(
                     });
                 }
                 Err(e) => {
-                    storage_embed.set_embedding_status_sync(&atom_id_embed, "failed").ok();
+                    storage_embed.set_embedding_status_sync(&atom_id_embed, "failed", Some(e)).ok();
                     on_event_embed(EmbeddingEvent::EmbeddingFailed {
                         atom_id: atom_id_embed.clone(),
                         error: e.clone(),
@@ -648,7 +677,7 @@ pub fn spawn_embedding_task_single_with_settings<F>(
                     });
                 }
                 Err(e) => {
-                    storage_tag.set_tagging_status_sync(&atom_id_tag, "failed").ok();
+                    storage_tag.set_tagging_status_sync(&atom_id_tag, "failed", Some(&e)).ok();
                     on_event_tag(EmbeddingEvent::TaggingFailed {
                         atom_id: atom_id_tag.clone(),
                         error: e,
@@ -770,8 +799,8 @@ async fn process_embedding_batch_inner<F>(
     // Mark empty atoms as complete
     if !empty_atom_ids.is_empty() {
         for atom_id in &empty_atom_ids {
-            storage.set_embedding_status_sync(atom_id, "complete").ok();
-            storage.set_tagging_status_sync(atom_id, "skipped").ok();
+            storage.set_embedding_status_sync(atom_id, "complete", None).ok();
+            storage.set_tagging_status_sync(atom_id, "skipped", None).ok();
             on_event(EmbeddingEvent::EmbeddingComplete {
                 atom_id: atom_id.clone(),
             });
@@ -811,7 +840,7 @@ async fn process_embedding_batch_inner<F>(
                         new_tags_created,
                     },
                     Err(e) => {
-                        storage.set_tagging_status_sync(&atom_id, "failed").ok();
+                        storage.set_tagging_status_sync(&atom_id, "failed", Some(&e)).ok();
                         EmbeddingEvent::TaggingFailed {
                             atom_id: atom_id.clone(),
                             error: e,
@@ -850,14 +879,14 @@ async fn process_embedding_batch_inner<F>(
 
             match storage.save_chunks_and_embeddings_sync(atom_id, &chunks_with_embeddings) {
                 Ok(()) => {
-                    storage.set_embedding_status_sync(atom_id, "complete").ok();
+                    storage.set_embedding_status_sync(atom_id, "complete", None).ok();
                     completed_atom_ids.push(atom_id.clone());
                     on_event(EmbeddingEvent::EmbeddingComplete {
                         atom_id: atom_id.clone(),
                     });
                 }
                 Err(_) => {
-                    storage.set_embedding_status_sync(atom_id, "failed").ok();
+                    storage.set_embedding_status_sync(atom_id, "failed", Some("Failed to store embeddings in DB")).ok();
                     on_event(EmbeddingEvent::EmbeddingFailed {
                         atom_id: atom_id.clone(),
                         error: "Failed to store embeddings in DB".to_string(),
@@ -868,7 +897,7 @@ async fn process_embedding_batch_inner<F>(
 
         // Mark atoms that failed embedding API calls
         for (atom_id, error) in &failed_atoms {
-            storage.set_embedding_status_sync(atom_id, "failed").ok();
+            storage.set_embedding_status_sync(atom_id, "failed", Some(error)).ok();
             on_event(EmbeddingEvent::EmbeddingFailed {
                 atom_id: atom_id.clone(),
                 error: error.clone(),

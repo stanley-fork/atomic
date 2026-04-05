@@ -69,6 +69,14 @@ pub async fn reset_stuck_processing(db: Db) -> HttpResponse {
     }
 }
 
+#[utoipa::path(get, path = "/api/embeddings/status", responses((status = 200, description = "Pipeline status summary")), tag = "embeddings")]
+pub async fn get_pipeline_status(db: Db) -> HttpResponse {
+    match db.0.get_pipeline_status() {
+        Ok(status) => HttpResponse::Ok().json(status),
+        Err(e) => crate::error::error_response(e),
+    }
+}
+
 #[utoipa::path(get, path = "/api/atoms/{id}/embedding-status", params(("id" = String, Path, description = "Atom ID")), responses((status = 200, description = "Embedding status"), (status = 404, description = "Atom not found", body = ApiErrorResponse)), tag = "embeddings")]
 pub async fn get_embedding_status(
     db: Db,

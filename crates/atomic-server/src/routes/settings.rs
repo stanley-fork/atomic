@@ -38,64 +38,52 @@ pub async fn set_setting(
         let on_event = crate::event_bridge::embedding_event_callback(state.event_tx.clone());
         match web::block(move || {
             let result = core.set_setting_with_reembed(&key, &value, on_event.clone());
-            // If dimension changed, also recreate vector indexes on all other databases
-            // AND enqueue their atoms for re-embedding. Without the second step those
-            // atoms get reset to `pending` but never actually run through the pipeline.
-            // Best-effort: failures here must not override the already-successful result.
-            if let Ok((true, _)) = &result {
-                match core.get_settings() {
-                    Ok(current_settings) => {
-                        let config = atomic_core::providers::ProviderConfig::from_settings(&current_settings);
-                        let new_dim = config.embedding_dimension();
-                        if let Err(e) = manager.recreate_other_vector_indexes(new_dim, &active_id) {
-                            tracing::error!("Failed to recreate vector indexes on other databases: {}", e);
-                        } else {
-                            // Enqueue re-embedding for every non-active database.
-                            match manager.list_databases() {
-                                Ok((dbs, _)) => {
-                                    for db_info in dbs {
-                                        if db_info.id == active_id {
-                                            continue;
-                                        }
-                                        match manager.get_core(&db_info.id) {
-                                            Ok(other_core) => {
-                                                match other_core.spawn_reembed_pending(on_event.clone()) {
-                                                    Ok(n) => tracing::info!(
-                                                        db_id = %db_info.id,
-                                                        db_name = %db_info.name,
-                                                        queued = n,
-                                                        "Queued re-embedding for non-active database"
-                                                    ),
-                                                    Err(e) => tracing::error!(
-                                                        db_id = %db_info.id,
-                                                        "Failed to queue re-embedding: {}",
-                                                        e
-                                                    ),
-                                                }
+            // If dimension changed, recreate vector indexes on all other databases
+            // AND enqueue their atoms for re-embedding.
+            if let Ok(ref r) = &result {
+                if r.dimension_changed {
+                    if let Err(e) = manager.recreate_other_vector_indexes(r.new_dim, &active_id) {
+                        tracing::error!("Failed to recreate vector indexes on other databases: {}", e);
+                    } else {
+                        // Enqueue re-embedding for every non-active database.
+                        match manager.list_databases() {
+                            Ok((dbs, _)) => {
+                                for db_info in dbs {
+                                    if db_info.id == active_id {
+                                        continue;
+                                    }
+                                    match manager.get_core(&db_info.id) {
+                                        Ok(other_core) => {
+                                            match other_core.spawn_reembed_pending(on_event.clone()) {
+                                                Ok(n) => tracing::info!(
+                                                    db_id = %db_info.id,
+                                                    db_name = %db_info.name,
+                                                    queued = n,
+                                                    "Queued re-embedding for non-active database"
+                                                ),
+                                                Err(e) => tracing::error!(
+                                                    db_id = %db_info.id,
+                                                    "Failed to queue re-embedding: {}",
+                                                    e
+                                                ),
                                             }
-                                            Err(e) => tracing::error!(
-                                                db_id = %db_info.id,
-                                                "Failed to load core for re-embed: {}",
-                                                e
-                                            ),
                                         }
+                                        Err(e) => tracing::error!(
+                                            db_id = %db_info.id,
+                                            "Failed to load core for re-embed: {}",
+                                            e
+                                        ),
                                     }
                                 }
-                                Err(e) => tracing::error!("Failed to list databases for re-embed: {}", e),
                             }
+                            Err(e) => tracing::error!("Failed to list databases for re-embed: {}", e),
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to get settings for dimension calc: {}", e);
                     }
                 }
             }
             result
         }).await {
-            Ok(Ok((changed, count))) => HttpResponse::Ok().json(serde_json::json!({
-                "dimension_changed": changed,
-                "pending_reembed_count": count,
-            })),
+            Ok(Ok(result)) => HttpResponse::Ok().json(result),
             Ok(Err(e)) => crate::error::error_response(e),
             Err(e) => HttpResponse::InternalServerError()
                 .json(serde_json::json!({"error": e.to_string()})),

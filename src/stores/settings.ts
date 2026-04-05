@@ -27,6 +27,8 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   },
   
   setSetting: async (key: string, value: string) => {
+    const current = useSettingsStore.getState().settings[key];
+    if (current === value) return;
     try {
       await getTransport().invoke('set_setting', { key, value });
       set((state) => ({

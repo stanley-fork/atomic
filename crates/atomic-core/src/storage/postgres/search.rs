@@ -439,11 +439,14 @@ async fn pg_batch_fetch_atoms(
         String,
         String,
         String,
+        Option<String>,
+        Option<String>,
     )> = sqlx::query_as(
         "SELECT id, content, title, snippet, source_url, source, published_at,
                 created_at, updated_at,
                 COALESCE(embedding_status, 'pending'),
-                COALESCE(tagging_status, 'pending')
+                COALESCE(tagging_status, 'pending'),
+                embedding_error, tagging_error
          FROM atoms WHERE id = ANY($1) AND db_id = $2",
     )
     .bind(atom_ids)
@@ -467,6 +470,8 @@ async fn pg_batch_fetch_atoms(
                 updated_at: r.8,
                 embedding_status: r.9,
                 tagging_status: r.10,
+                embedding_error: r.11,
+                tagging_error: r.12,
             };
             (r.0, atom)
         })

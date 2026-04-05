@@ -126,6 +126,8 @@ impl SqliteStorage {
             updated_at: created_at.to_string(),
             embedding_status: embedding_status.to_string(),
             tagging_status: "pending".to_string(),
+            embedding_error: None,
+            tagging_error: None,
         };
 
         let tags = {
@@ -201,6 +203,8 @@ impl SqliteStorage {
                     updated_at: created_at.clone(),
                     embedding_status: "pending".to_string(),
                     tagging_status: "pending".to_string(),
+                    embedding_error: None,
+                    tagging_error: None,
                 };
 
                 atoms_with_tags.push(AtomWithTags {
@@ -525,7 +529,8 @@ impl SqliteStorage {
             format!(
                 "SELECT a.id, a.title, a.snippet, a.source_url, a.source, a.published_at,
                         a.created_at, a.updated_at,
-                        COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending')
+                        COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending'),
+                        a.embedding_error, a.tagging_error
                  FROM atoms a
                  {where_sql}
                  ORDER BY {sort_col} {sort_dir}, a.id {sort_dir}
@@ -538,7 +543,8 @@ impl SqliteStorage {
             format!(
                 "SELECT a.id, a.title, a.snippet, a.source_url, a.source, a.published_at,
                         a.created_at, a.updated_at,
-                        COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending')
+                        COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending'),
+                        a.embedding_error, a.tagging_error
                  FROM atoms a
                  {where_sql}
                  ORDER BY {sort_col} {sort_dir}, a.id {sort_dir}
@@ -560,6 +566,8 @@ impl SqliteStorage {
             String,
             String,
             String,
+            Option<String>,
+            Option<String>,
         );
         let atoms: Vec<AtomRow> = stmt
             .query_map(bind_refs.as_slice(), |row| {
@@ -574,6 +582,8 @@ impl SqliteStorage {
                     row.get(7)?,
                     row.get(8)?,
                     row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -611,6 +621,8 @@ impl SqliteStorage {
                     updated_at,
                     embedding_status,
                     tagging_status,
+                    embedding_error,
+                    tagging_error,
                 )| {
                     let tags = tag_map.get(&id).cloned().unwrap_or_default();
                     AtomSummary {
@@ -624,6 +636,8 @@ impl SqliteStorage {
                         updated_at,
                         embedding_status,
                         tagging_status,
+                        embedding_error,
+                        tagging_error,
                         tags,
                     }
                 },

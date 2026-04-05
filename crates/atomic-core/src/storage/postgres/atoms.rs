@@ -99,6 +99,8 @@ impl PostgresStorage {
             String,         // updated_at
             String,         // embedding_status
             String,         // tagging_status
+            Option<String>, // embedding_error
+            Option<String>, // tagging_error
         ),
     ) -> Atom {
         Atom {
@@ -113,6 +115,8 @@ impl PostgresStorage {
             updated_at: row.8,
             embedding_status: row.9,
             tagging_status: row.10,
+            embedding_error: row.11,
+            tagging_error: row.12,
         }
     }
 }
@@ -124,11 +128,13 @@ impl AtomStore for PostgresStorage {
             String, String, String, String,
             Option<String>, Option<String>, Option<String>,
             String, String, String, String,
+            Option<String>, Option<String>,
         )> = sqlx::query_as(
             "SELECT id, content, title, snippet, source_url, source, published_at,
                     created_at, updated_at,
                     COALESCE(embedding_status, 'pending'),
-                    COALESCE(tagging_status, 'pending')
+                    COALESCE(tagging_status, 'pending'),
+                    embedding_error, tagging_error
              FROM atoms WHERE db_id = $1 ORDER BY updated_at DESC",
         )
         .bind(&self.db_id)
@@ -166,11 +172,13 @@ impl AtomStore for PostgresStorage {
             String, String, String, String,
             Option<String>, Option<String>, Option<String>,
             String, String, String, String,
+            Option<String>, Option<String>,
         )> = sqlx::query_as(
             "SELECT id, content, title, snippet, source_url, source, published_at,
                     created_at, updated_at,
                     COALESCE(embedding_status, 'pending'),
-                    COALESCE(tagging_status, 'pending')
+                    COALESCE(tagging_status, 'pending'),
+                    embedding_error, tagging_error
              FROM atoms WHERE id = $1 AND db_id = $2",
         )
         .bind(id)
@@ -250,6 +258,8 @@ impl AtomStore for PostgresStorage {
             updated_at: created_at.to_string(),
             embedding_status: embedding_status.to_string(),
             tagging_status: tagging_status.to_string(),
+            embedding_error: None,
+            tagging_error: None,
         };
 
         Ok(AtomWithTags { atom, tags })
@@ -313,6 +323,8 @@ impl AtomStore for PostgresStorage {
                 updated_at: created_at.clone(),
                 embedding_status: "pending".to_string(),
                 tagging_status: "pending".to_string(),
+                embedding_error: None,
+                tagging_error: None,
             };
 
             atoms_with_tags.push(AtomWithTags {
@@ -394,11 +406,13 @@ impl AtomStore for PostgresStorage {
             String, String, String, String,
             Option<String>, Option<String>, Option<String>,
             String, String, String, String,
+            Option<String>, Option<String>,
         ) = sqlx::query_as(
             "SELECT id, content, title, snippet, source_url, source, published_at,
                     created_at, updated_at,
                     COALESCE(embedding_status, 'pending'),
-                    COALESCE(tagging_status, 'pending')
+                    COALESCE(tagging_status, 'pending'),
+                    embedding_error, tagging_error
              FROM atoms WHERE id = $1 AND db_id = $2",
         )
         .bind(id)
@@ -437,6 +451,7 @@ impl AtomStore for PostgresStorage {
             String, String, String, String,
             Option<String>, Option<String>, Option<String>,
             String, String, String, String,
+            Option<String>, Option<String>,
         )> = sqlx::query_as(
             "WITH RECURSIVE descendant_tags(id) AS (
                 SELECT id FROM tags WHERE id = $1 AND db_id = $2
@@ -447,13 +462,15 @@ impl AtomStore for PostgresStorage {
             SELECT a.id, a.content, a.title, a.snippet, a.source_url, a.source, a.published_at,
                    a.created_at, a.updated_at,
                    COALESCE(a.embedding_status, 'pending'),
-                   COALESCE(a.tagging_status, 'pending')
+                   COALESCE(a.tagging_status, 'pending'),
+                   a.embedding_error, a.tagging_error
             FROM atom_tags at
             INNER JOIN atoms a ON a.id = at.atom_id
             WHERE at.tag_id IN (SELECT id FROM descendant_tags)
             GROUP BY a.id, a.content, a.title, a.snippet, a.source_url, a.source,
                      a.published_at, a.created_at, a.updated_at,
-                     a.embedding_status, a.tagging_status
+                     a.embedding_status, a.tagging_status,
+                     a.embedding_error, a.tagging_error
             ORDER BY a.updated_at DESC",
         )
         .bind(tag_id)
@@ -686,7 +703,8 @@ impl AtomStore for PostgresStorage {
             format!(
                 "SELECT a.id, a.title, a.snippet, a.source_url, a.source, a.published_at,
                         a.created_at, a.updated_at,
-                        COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending')
+                        COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending'),
+                        a.embedding_error, a.tagging_error
                  FROM atoms a
                  {where_sql}
                  ORDER BY {sort_col} {sort_dir}, a.id {sort_dir}
@@ -699,7 +717,8 @@ impl AtomStore for PostgresStorage {
             format!(
                 "SELECT a.id, a.title, a.snippet, a.source_url, a.source, a.published_at,
                         a.created_at, a.updated_at,
-                        COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending')
+                        COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending'),
+                        a.embedding_error, a.tagging_error
                  FROM atoms a
                  {where_sql}
                  ORDER BY {sort_col} {sort_dir}, a.id {sort_dir}
@@ -711,6 +730,7 @@ impl AtomStore for PostgresStorage {
             String, String, String,
             Option<String>, Option<String>, Option<String>,
             String, String, String, String,
+            Option<String>, Option<String>,
         )>(&data_sql);
         for bv in &bind_values {
             match bv {
@@ -745,7 +765,7 @@ impl AtomStore for PostgresStorage {
         let summaries: Vec<AtomSummary> = rows
             .into_iter()
             .map(
-                |(id, title, snippet, source_url, source, published_at, created_at, updated_at, embedding_status, tagging_status)| {
+                |(id, title, snippet, source_url, source, published_at, created_at, updated_at, embedding_status, tagging_status, embedding_error, tagging_error)| {
                     let tags = tag_map.get(&id).cloned().unwrap_or_default();
                     AtomSummary {
                         id,
@@ -758,6 +778,8 @@ impl AtomStore for PostgresStorage {
                         updated_at,
                         embedding_status,
                         tagging_status,
+                        embedding_error,
+                        tagging_error,
                         tags,
                     }
                 },
@@ -895,11 +917,13 @@ impl AtomStore for PostgresStorage {
             String, String, String, String,
             Option<String>, Option<String>, Option<String>,
             String, String, String, String,
+            Option<String>, Option<String>,
         )> = sqlx::query_as(
             "SELECT id, content, title, snippet, source_url, source, published_at,
                     created_at, updated_at,
                     COALESCE(embedding_status, 'pending'),
-                    COALESCE(tagging_status, 'pending')
+                    COALESCE(tagging_status, 'pending'),
+                    embedding_error, tagging_error
              FROM atoms WHERE db_id = $1 ORDER BY updated_at DESC",
         )
         .bind(&self.db_id)
@@ -980,11 +1004,13 @@ impl AtomStore for PostgresStorage {
             String, String, String, String,
             Option<String>, Option<String>, Option<String>,
             String, String, String, String,
+            Option<String>, Option<String>,
         )> = sqlx::query_as(
             "SELECT id, content, title, snippet, source_url, source, published_at,
                     created_at, updated_at,
                     COALESCE(embedding_status, 'pending'),
-                    COALESCE(tagging_status, 'pending')
+                    COALESCE(tagging_status, 'pending'),
+                    embedding_error, tagging_error
              FROM atoms WHERE source_url = $1 AND db_id = $2",
         )
         .bind(url)

@@ -199,7 +199,7 @@ impl Database {
     ///   1. Add a new `if version < N` block at the end (before the virtual-table section)
     ///   2. End the block with `PRAGMA user_version = N;`
     ///   3. Bump LATEST_VERSION
-    const LATEST_VERSION: i32 = 7;
+    const LATEST_VERSION: i32 = 8;
 
     pub fn run_migrations(conn: &Connection) -> Result<(), AtomicCoreError> {
         let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -563,6 +563,15 @@ impl Database {
 
                 PRAGMA user_version = 7;
                 "#,
+            )?;
+        }
+
+        // --- V7 → V8: Store error reasons for failed embeddings/tagging ---
+        if version < 8 {
+            conn.execute_batch(
+                "ALTER TABLE atoms ADD COLUMN embedding_error TEXT;
+                 ALTER TABLE atoms ADD COLUMN tagging_error TEXT;
+                 PRAGMA user_version = 8;",
             )?;
         }
 

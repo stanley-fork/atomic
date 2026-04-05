@@ -100,6 +100,7 @@ impl PostgresStorage {
         let migrations: &[(i32, &str)] = &[
             (1, include_str!("migrations/001_initial.sql")),
             (2, include_str!("migrations/002_add_db_id.sql")),
+            (3, include_str!("migrations/003_add_error_columns.sql")),
         ];
 
         // Advisory lock key — arbitrary fixed i64 to serialize migrations

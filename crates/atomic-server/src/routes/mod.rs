@@ -122,6 +122,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         "/embeddings/reset-stuck",
         web::post().to(embedding::reset_stuck_processing),
     );
+    cfg.route(
+        "/embeddings/status",
+        web::get().to(embedding::get_pipeline_status),
+    );
 
     // Canvas
     cfg.route("/canvas/positions", web::get().to(canvas::get_positions));

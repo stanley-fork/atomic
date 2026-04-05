@@ -686,11 +686,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     setOpenaiCompatTimeoutSecs(settings.openai_compat_timeout_secs || '300');
   }, [settings]);
 
-  // Check Ollama connection when provider is ollama or host changes
+  // Check Ollama connection when provider is ollama or host changes.
+  // Debounced so typing into the host field doesn't fire a request per keystroke.
   useEffect(() => {
-    if (isOpen && provider === 'ollama') {
-      checkOllamaConnection(ollamaHost);
-    }
+    if (!isOpen || provider !== 'ollama') return;
+    const handle = setTimeout(() => checkOllamaConnection(ollamaHost), 400);
+    return () => clearTimeout(handle);
   }, [isOpen, provider, ollamaHost, checkOllamaConnection]);
 
   useEffect(() => {

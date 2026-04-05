@@ -20,6 +20,8 @@ pub struct Atom {
     pub updated_at: String,
     pub embedding_status: String, // 'pending', 'processing', 'complete', 'failed'
     pub tagging_status: String,   // 'pending', 'processing', 'complete', 'failed', 'skipped'
+    pub embedding_error: Option<String>,
+    pub tagging_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +74,8 @@ pub struct AtomSummary {
     pub updated_at: String,
     pub embedding_status: String,
     pub tagging_status: String,
+    pub embedding_error: Option<String>,
+    pub tagging_error: Option<String>,
     pub tags: Vec<Tag>,
 }
 
@@ -627,4 +631,38 @@ pub struct ListAtomsParams {
 pub struct SourceInfo {
     pub source: String,
     pub atom_count: i32,
+}
+
+// ==================== Pipeline Status ====================
+
+/// Result of changing a provider-related setting
+#[derive(Debug, Clone, Serialize)]
+pub struct SettingChangeResult {
+    pub dimension_changed: bool,
+    pub old_dim: usize,
+    pub new_dim: usize,
+    pub total_atom_count: i32,
+    pub retried_failed_count: i32,
+}
+
+/// Embedding/tagging pipeline status summary
+#[derive(Debug, Clone, Serialize)]
+pub struct PipelineStatus {
+    pub pending: i32,
+    pub processing: i32,
+    pub complete: i32,
+    pub failed_count: i32,
+    pub failed: Vec<FailedAtom>,
+    pub tagging_failed_count: i32,
+    pub tagging_failed: Vec<FailedAtom>,
+}
+
+/// An atom that failed embedding or tagging
+#[derive(Debug, Clone, Serialize)]
+pub struct FailedAtom {
+    pub atom_id: String,
+    pub title: String,
+    pub snippet: String,
+    pub error: Option<String>,
+    pub updated_at: String,
 }

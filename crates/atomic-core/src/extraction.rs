@@ -128,6 +128,22 @@ Guidelines:
 - Prefer broad tags like "John Smith" rather than overly specific tags such as "Early Life of John Smith"
 - Every tag must have a valid parent_name from the top-level categories"#;
 
+/// Strip markdown code fences from LLM output before parsing as JSON.
+/// Some models wrap structured output in ```json ... ``` fences.
+fn strip_markdown_fences(content: &str) -> String {
+    let trimmed = content.trim();
+    if trimmed.starts_with("```") {
+        trimmed
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Default maximum characters to send for tagging (~30K tokens ≈ 120K chars)
 const DEFAULT_MAX_TAGGING_CHARS: usize = 120_000;
 
@@ -236,7 +252,8 @@ pub async fn extract_tags_from_content(
                 if !response_content.is_empty() {
                     tracing::debug!(output = %response_content, "TAG EXTRACTION LLM OUTPUT");
 
-                    let result: ExtractionResult = serde_json::from_str(response_content).map_err(|e| {
+                    let cleaned = strip_markdown_fences(response_content);
+                    let result: ExtractionResult = serde_json::from_str(&cleaned).map_err(|e| {
                         format!(
                             "Failed to parse extraction result: {} - Content: {}",
                             e, response_content
@@ -334,7 +351,8 @@ pub async fn extract_tags_from_chunk(
                     tracing::debug!(output = %content, "TAG EXTRACTION LLM OUTPUT");
 
                     // Parse the extraction result from the content
-                    let result: ExtractionResult = serde_json::from_str(content).map_err(|e| {
+                    let cleaned = strip_markdown_fences(content);
+                    let result: ExtractionResult = serde_json::from_str(&cleaned).map_err(|e| {
                         format!(
                             "Failed to parse extraction result: {} - Content: {}",
                             e, content

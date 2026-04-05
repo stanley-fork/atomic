@@ -519,7 +519,7 @@ impl AtomicCore {
         // Spawn batch embedding (same pattern as import_obsidian_vault)
         if !embedding_pairs.is_empty() {
             for (atom_id, _) in &embedding_pairs {
-                self.storage.set_embedding_status_sync(atom_id, "processing").ok();
+                self.storage.set_embedding_status_sync(atom_id, "processing", None).ok();
             }
 
             let storage_clone = self.storage.clone();
@@ -908,6 +908,14 @@ impl AtomicCore {
     where
         F: Fn(EmbeddingEvent) + Send + Sync + 'static,
     {
+        let status = self.storage.get_embedding_status_impl(atom_id)?;
+        if status == "processing" {
+            return Err(AtomicCoreError::Validation(format!(
+                "Atom {} is already being embedded",
+                atom_id
+            )));
+        }
+
         let content = self.storage.get_atom_content_impl(atom_id)?
             .ok_or_else(|| AtomicCoreError::NotFound(format!("Atom {} not found", atom_id)))?;
 
@@ -999,8 +1007,15 @@ impl AtomicCore {
         // Verify atom exists
         self.storage.get_atom_content_impl(atom_id)?
             .ok_or_else(|| AtomicCoreError::NotFound(format!("Atom {} not found", atom_id)))?;
+        let status = self.storage.get_tagging_status_impl(atom_id)?;
+        if status == "processing" {
+            return Err(AtomicCoreError::Validation(format!(
+                "Atom {} is already being tagged",
+                atom_id
+            )));
+        }
         // Reset tagging status to pending
-        self.storage.set_tagging_status_sync(atom_id, "pending")?;
+        self.storage.set_tagging_status_sync(atom_id, "pending", None)?;
 
         let storage = self.storage.clone();
         let atom_id = atom_id.to_string();
@@ -1302,6 +1317,11 @@ impl AtomicCore {
         self.storage.get_embedding_status_impl(atom_id)
     }
 
+    /// Get pipeline status (embedding counts + failed atoms)
+    pub fn get_pipeline_status(&self) -> Result<models::PipelineStatus, AtomicCoreError> {
+        self.storage.get_pipeline_status()
+    }
+
     /// Process pending tag extraction for atoms with complete embeddings
     pub fn process_pending_tagging<F>(&self, on_event: F) -> Result<i32, AtomicCoreError>
     where
@@ -1335,38 +1355,43 @@ impl AtomicCore {
     // ==================== Settings with Re-embed ====================
 
     /// Set a setting, handling embedding dimension changes.
-    /// Returns (dimension_changed, pending_reembed_count).
+    /// Returns (dimension_changed, old_dim, new_dim, total_atom_count, retried_failed_count).
+    /// Does NOT auto-re-embed on dimension change — caller must confirm with user first,
+    /// then call `reembed_all_atoms` explicitly.
+    /// DOES auto-retry failed atoms when provider config changes (URL, key, model).
     pub fn set_setting_with_reembed<F>(
         &self,
         key: &str,
         value: &str,
         on_event: F,
-    ) -> Result<(bool, i32), AtomicCoreError>
+    ) -> Result<SettingChangeResult, AtomicCoreError>
     where
         F: Fn(EmbeddingEvent) + Send + Sync + Clone + 'static,
     {
+        let current_settings = self.get_settings()?;
+        let value_changed = current_settings.get(key).map(|s| s.as_str()) != Some(value);
+
         let dimension_affecting_keys = ["provider", "embedding_model", "ollama_embedding_model", "openai_compat_embedding_model", "openai_compat_embedding_dimension"];
         let mut dimension_changed = false;
+        let mut old_dim = 0usize;
+        let mut new_dim = 0usize;
 
-        if dimension_affecting_keys.contains(&key) {
-            // Use registry settings if available for dimension calculation
-            let current_settings = self.get_settings()?;
+        if dimension_affecting_keys.contains(&key) && value_changed {
             let current_config = ProviderConfig::from_settings(&current_settings);
-            let current_dim = current_config.embedding_dimension();
+            old_dim = current_config.embedding_dimension();
 
-            let mut new_settings = current_settings;
+            let mut new_settings = current_settings.clone();
             new_settings.insert(key.to_string(), value.to_string());
             let new_config = ProviderConfig::from_settings(&new_settings);
-            let new_dim = new_config.embedding_dimension();
+            new_dim = new_config.embedding_dimension();
 
-            if current_dim != new_dim {
+            if old_dim != new_dim {
                 tracing::info!(
-                    current_dim,
+                    old_dim,
                     new_dim,
                     key,
-                    "Embedding dimension changing due to setting change - recreating vec_chunks"
+                    "Embedding dimension change detected — recreating vector index and re-embedding all atoms"
                 );
-                self.storage.recreate_vector_index_sync(new_dim)?;
                 dimension_changed = true;
             }
         }
@@ -1378,12 +1403,47 @@ impl AtomicCore {
             self.storage.set_setting_sync(key, value)?;
         }
 
-        let mut pending_count = 0i32;
         if dimension_changed {
-            pending_count = self.spawn_reembed_pending(on_event)?;
+            // Recreate the active database's vector index at the new dimension.
+            // This drops vec_chunks, recreates it, clears atom_chunks/semantic_edges,
+            // and resets every atom's embedding_status to 'pending'.
+            self.storage.recreate_vector_index_sync(new_dim)?;
+            tracing::info!(new_dim, "Recreated active database vector index for dimension change");
+            // Now spawn re-embedding — atoms are in 'pending' status after the recreate.
+            let queued = self.spawn_reembed_pending(on_event.clone())?;
+            tracing::info!(queued, "Queued atoms for re-embedding after dimension change");
         }
 
-        Ok((dimension_changed, pending_count))
+        // Auto-retry failed atoms when provider config changes
+        // (covers: URL, API key, model, provider type)
+        let retry_keys = [
+            "provider", "embedding_model", "ollama_embedding_model", "ollama_host",
+            "openai_compat_embedding_model", "openai_compat_base_url", "openai_compat_api_key",
+            "openrouter_api_key",
+        ];
+        let mut retried_failed = 0i32;
+        if retry_keys.contains(&key) && !dimension_changed && value_changed {
+            retried_failed = self.storage.reset_failed_embeddings_sync()?;
+            if retried_failed > 0 {
+                tracing::info!(
+                    retried_failed,
+                    key,
+                    "Provider config updated — retrying previously failed atoms"
+                );
+                let _ = self.process_pending_embeddings(on_event.clone());
+                let _ = self.process_pending_tagging(on_event);
+            }
+        }
+
+        let total_atoms = self.storage.count_pending_embeddings_sync().unwrap_or(0);
+
+        Ok(SettingChangeResult {
+            dimension_changed,
+            old_dim,
+            new_dim,
+            total_atom_count: total_atoms,
+            retried_failed_count: retried_failed,
+        })
     }
 
     // ==================== Utility Operations ====================
@@ -1634,7 +1694,7 @@ impl AtomicCore {
         // Trigger embedding processing for all imported atoms
         if !imported_atoms.is_empty() {
             for (atom_id, _) in &imported_atoms {
-                self.storage.set_embedding_status_sync(atom_id, "processing").ok();
+                self.storage.set_embedding_status_sync(atom_id, "processing", None).ok();
             }
 
             let storage_clone = self.storage.clone();
@@ -2508,10 +2568,10 @@ pub(crate) fn parse_source(source_url: &str) -> String {
 }
 
 /// Standard SELECT columns for reading an Atom from the DB.
-pub(crate) const ATOM_COLUMNS: &str = "id, content, title, snippet, source_url, source, published_at, created_at, updated_at, COALESCE(embedding_status, 'pending'), COALESCE(tagging_status, 'pending')";
+pub(crate) const ATOM_COLUMNS: &str = "id, content, title, snippet, source_url, source, published_at, created_at, updated_at, COALESCE(embedding_status, 'pending'), COALESCE(tagging_status, 'pending'), embedding_error, tagging_error";
 
 /// Same columns but table-aliased for JOINs.
-pub(crate) const ATOM_COLUMNS_A: &str = "a.id, a.content, a.title, a.snippet, a.source_url, a.source, a.published_at, a.created_at, a.updated_at, COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending')";
+pub(crate) const ATOM_COLUMNS_A: &str = "a.id, a.content, a.title, a.snippet, a.source_url, a.source, a.published_at, a.created_at, a.updated_at, COALESCE(a.embedding_status, 'pending'), COALESCE(a.tagging_status, 'pending'), a.embedding_error, a.tagging_error";
 
 /// Parse an Atom from a row selected with ATOM_COLUMNS.
 pub(crate) fn atom_from_row(row: &rusqlite::Row) -> rusqlite::Result<Atom> {
@@ -2527,6 +2587,8 @@ pub(crate) fn atom_from_row(row: &rusqlite::Row) -> rusqlite::Result<Atom> {
         updated_at: row.get(8)?,
         embedding_status: row.get(9)?,
         tagging_status: row.get(10)?,
+        embedding_error: row.get(11)?,
+        tagging_error: row.get(12)?,
     })
 }
 
