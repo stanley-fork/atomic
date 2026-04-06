@@ -216,6 +216,8 @@ dispatch! {
         => sqlite: get_atom_tag_ids_impl, pg_trait: AtomStore, pg_method: get_atom_tag_ids;
     fn get_atom_content_impl(&self, atom_id: &str) -> Result<Option<String>, AtomicCoreError>
         => sqlite: get_atom_content_impl, pg_trait: AtomStore, pg_method: get_atom_content;
+    fn get_atom_contents_batch_impl(&self, atom_ids: &[String]) -> Result<Vec<(String, String)>, AtomicCoreError>
+        => sqlite: get_atom_contents_batch_impl, pg_trait: AtomStore, pg_method: get_atom_contents_batch;
     fn check_existing_source_urls_sync(&self, urls: &[String]) -> Result<HashSet<String>, AtomicCoreError>
         => sqlite: check_existing_source_urls_sync, pg_trait: AtomStore, pg_method: check_existing_source_urls;
     fn source_url_exists_sync(&self, url: &str) -> Result<bool, AtomicCoreError>

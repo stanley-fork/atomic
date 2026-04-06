@@ -52,6 +52,11 @@ pub async fn generate_embeddings_with_config(
     config: &ProviderConfig,
     texts: &[String],
 ) -> Result<Vec<Vec<f32>>, EmbedError> {
+    let _permit = crate::executor::EMBEDDING_SEMAPHORE
+        .acquire()
+        .await
+        .expect("Embedding semaphore closed unexpectedly");
+
     let provider = get_embedding_provider(config).map_err(|e| EmbedError {
         message: e.to_string(),
         retryable: false,

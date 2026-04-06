@@ -911,6 +911,30 @@ impl AtomStore for PostgresStorage {
         Ok(content)
     }
 
+    async fn get_atom_contents_batch(&self, atom_ids: &[String]) -> StorageResult<Vec<(String, String)>> {
+        if atom_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        // Build $1, $2, ... placeholders
+        let placeholders: String = atom_ids.iter().enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = format!(
+            "SELECT id, content FROM atoms WHERE id IN ({}) AND db_id = ${}",
+            placeholders,
+            atom_ids.len() + 1,
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(&query);
+        for id in atom_ids {
+            q = q.bind(id);
+        }
+        q = q.bind(&self.db_id);
+        let rows = q.fetch_all(&self.pool).await
+            .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
+        Ok(rows)
+    }
+
     async fn get_atoms_with_embeddings(&self) -> StorageResult<Vec<AtomWithEmbedding>> {
         // Fetch all atoms
         let rows: Vec<(

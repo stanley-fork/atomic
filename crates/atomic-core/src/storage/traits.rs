@@ -88,6 +88,9 @@ pub trait AtomStore: Send + Sync {
     /// Get just the content for an atom (lightweight, for embedding pipeline).
     async fn get_atom_content(&self, atom_id: &str) -> StorageResult<Option<String>>;
 
+    /// Get content for multiple atoms in a single query.
+    async fn get_atom_contents_batch(&self, atom_ids: &[String]) -> StorageResult<Vec<(String, String)>>;
+
     /// Check which source URLs already exist in the database.
     /// Returns the set of URLs that are already present.
     async fn check_existing_source_urls(&self, urls: &[String]) -> StorageResult<std::collections::HashSet<String>>;

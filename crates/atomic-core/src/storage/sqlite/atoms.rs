@@ -757,6 +757,25 @@ impl SqliteStorage {
         }
     }
 
+    pub(crate) fn get_atom_contents_batch_impl(&self, atom_ids: &[String]) -> StorageResult<Vec<(String, String)>> {
+        if atom_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let conn = self.db.read_conn()?;
+        let placeholders: String = atom_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!("SELECT id, content FROM atoms WHERE id IN ({})", placeholders);
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(atom_ids.iter()),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        let mut results = Vec::with_capacity(atom_ids.len());
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
     pub(crate) fn get_atoms_with_embeddings_impl(
         &self,
     ) -> StorageResult<Vec<AtomWithEmbedding>> {
@@ -1030,6 +1049,10 @@ impl AtomStore for SqliteStorage {
 
     async fn get_atom_content(&self, atom_id: &str) -> StorageResult<Option<String>> {
         self.get_atom_content_impl(atom_id)
+    }
+
+    async fn get_atom_contents_batch(&self, atom_ids: &[String]) -> StorageResult<Vec<(String, String)>> {
+        self.get_atom_contents_batch_impl(atom_ids)
     }
 
     async fn check_existing_source_urls(&self, urls: &[String]) -> StorageResult<HashSet<String>> {

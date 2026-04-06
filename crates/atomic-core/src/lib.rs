@@ -546,25 +546,57 @@ impl AtomicCore {
         // Bulk insert via storage
         let atoms_with_tags = self.storage.insert_atoms_bulk_impl(&atoms_to_insert)?;
 
-        // Build embedding pairs from inserted atoms
-        let embedding_pairs: Vec<(String, String)> = atoms_with_tags
+        // Collect atom IDs for background embedding (don't clone content — read from DB later)
+        let atom_ids: Vec<String> = atoms_with_tags
             .iter()
-            .map(|awt| (awt.atom.id.clone(), awt.atom.content.clone()))
+            .map(|awt| awt.atom.id.clone())
             .collect();
 
-        // Spawn batch embedding (same pattern as import_obsidian_vault)
-        if !embedding_pairs.is_empty() {
-            for (atom_id, _) in &embedding_pairs {
+        // Spawn batch embedding
+        if !atom_ids.is_empty() {
+            for atom_id in &atom_ids {
                 self.storage.set_embedding_status_sync(atom_id, "processing", None).ok();
             }
 
             let storage_clone = self.storage.clone();
             let bg_settings = self.settings_for_background();
             executor::spawn(async move {
-                match bg_settings {
-                    Some(s) => embedding::process_embedding_batch_with_settings(storage_clone, embedding_pairs, false, on_event, s).await,
-                    None => embedding::process_embedding_batch(storage_clone, embedding_pairs, false, on_event).await,
+                // Limit concurrent batch tasks to bound memory from queued work
+                let _permit = executor::EMBEDDING_BATCH_SEMAPHORE
+                    .acquire()
+                    .await
+                    .expect("Embedding batch semaphore closed unexpectedly");
+
+                // Read content from DB in one query (not captured at spawn time)
+                let embedding_pairs = match storage_clone.get_atom_contents_batch_impl(&atom_ids) {
+                    Ok(pairs) => {
+                        // Mark any missing atoms as failed so they don't stay stuck in "processing"
+                        if pairs.len() < atom_ids.len() {
+                            let found_ids: std::collections::HashSet<&str> = pairs.iter().map(|(id, _)| id.as_str()).collect();
+                            for atom_id in &atom_ids {
+                                if !found_ids.contains(atom_id.as_str()) {
+                                    tracing::warn!(atom_id, "Atom not found for embedding, marking as failed");
+                                    storage_clone.set_embedding_status_sync(atom_id, "failed", Some("Atom not found")).ok();
+                                }
+                            }
+                        }
+                        pairs
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to batch-read atom contents for embedding");
+                        for atom_id in &atom_ids {
+                            storage_clone.set_embedding_status_sync(atom_id, "failed", Some(&e.to_string())).ok();
+                        }
+                        return;
+                    }
                 };
+
+                if !embedding_pairs.is_empty() {
+                    match bg_settings {
+                        Some(s) => embedding::process_embedding_batch_with_settings(storage_clone, embedding_pairs, false, on_event, s).await,
+                        None => embedding::process_embedding_batch(storage_clone, embedding_pairs, false, on_event).await,
+                    };
+                }
             });
         }
 

@@ -21,7 +21,10 @@ static BACKGROUND: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 pub static LLM_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(4));
 
 /// Concurrency limit for embedding API calls.
-pub static EMBEDDING_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
+pub static EMBEDDING_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(4));
+
+/// Concurrency limit for embedding batch tasks (limits memory from queued content).
+pub static EMBEDDING_BATCH_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 
 /// Concurrency limit for HTTP fetches (ingestion pipeline).
 pub static FETCH_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(8));
