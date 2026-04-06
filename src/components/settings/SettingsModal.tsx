@@ -2189,6 +2189,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             {importResult.tags_created > 0 && (
                               <div>Tags created: {importResult.tags_created}</div>
                             )}
+                            {importResult.errors > 0 && (
+                              <div>Errors: {importResult.errors} (failed to create)</div>
+                            )}
                             {importResult.skipped > 0 && (
                               <div>Skipped: {importResult.skipped} (duplicates/empty)</div>
                             )}
