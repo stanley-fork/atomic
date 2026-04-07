@@ -1,6 +1,6 @@
 [package]
 name = "atomic"
-version = "1.15.2"
+version = "1.16.0"
 description = "A note-taking desktop application"
 authors = ["you"]
 edition = "2021"
