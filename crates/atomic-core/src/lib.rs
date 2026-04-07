@@ -592,9 +592,10 @@ impl AtomicCore {
                 };
 
                 if !embedding_pairs.is_empty() {
+                    let input = embedding::AtomInput::Preloaded(embedding_pairs);
                     match bg_settings {
-                        Some(s) => embedding::process_embedding_batch_with_settings(storage_clone, embedding_pairs, false, on_event, s).await,
-                        None => embedding::process_embedding_batch(storage_clone, embedding_pairs, false, on_event).await,
+                        Some(s) => embedding::process_embedding_batch_with_settings(storage_clone, input, false, on_event, s).await,
+                        None => embedding::process_embedding_batch(storage_clone, input, false, on_event).await,
                     };
                 }
             });
@@ -1193,24 +1194,25 @@ impl AtomicCore {
     where
         F: Fn(EmbeddingEvent) + Send + Sync + Clone + 'static,
     {
-        let pending_atoms = self.storage.claim_pending_reembedding_sync()?;
-        let count = pending_atoms.len() as i32;
+        let pending_ids = self.storage.claim_pending_reembedding_sync()?;
+        let count = pending_ids.len() as i32;
 
         if count > 0 {
             let storage_clone = self.storage.clone();
             let bg_settings = self.settings_for_background();
+            let input = embedding::AtomInput::IdsOnly(pending_ids);
             executor::spawn(async move {
                 match bg_settings {
                     Some(s) => embedding::process_embedding_batch_with_settings(
                         storage_clone,
-                        pending_atoms,
+                        input,
                         true, // skip tagging - re-embedding only
                         on_event,
                         s,
                     ).await,
                     None => embedding::process_embedding_batch(
                         storage_clone,
-                        pending_atoms,
+                        input,
                         true,
                         on_event,
                     ).await,
@@ -1226,24 +1228,25 @@ impl AtomicCore {
     where
         F: Fn(EmbeddingEvent) + Send + Sync + Clone + 'static,
     {
-        let atoms = self.storage.claim_all_for_reembedding_sync()?;
-        let count = atoms.len() as i32;
+        let atom_ids = self.storage.claim_all_for_reembedding_sync()?;
+        let count = atom_ids.len() as i32;
 
         if count > 0 {
             let storage_clone = self.storage.clone();
             let bg_settings = self.settings_for_background();
+            let input = embedding::AtomInput::IdsOnly(atom_ids);
             executor::spawn(async move {
                 match bg_settings {
                     Some(s) => embedding::process_embedding_batch_with_settings(
                         storage_clone,
-                        atoms,
+                        input,
                         false,
                         on_event,
                         s,
                     ).await,
                     None => embedding::process_embedding_batch(
                         storage_clone,
-                        atoms,
+                        input,
                         false,
                         on_event,
                     ).await,
@@ -1955,10 +1958,11 @@ impl AtomicCore {
 
             let storage_clone = self.storage.clone();
             let bg_settings = self.settings_for_background();
+            let input = embedding::AtomInput::Preloaded(imported_atoms);
             executor::spawn(async move {
                 match bg_settings {
-                    Some(s) => embedding::process_embedding_batch_with_settings(storage_clone, imported_atoms, false, on_event, s).await,
-                    None => embedding::process_embedding_batch(storage_clone, imported_atoms, false, on_event).await,
+                    Some(s) => embedding::process_embedding_batch_with_settings(storage_clone, input, false, on_event, s).await,
+                    None => embedding::process_embedding_batch(storage_clone, input, false, on_event).await,
                 };
             });
         }

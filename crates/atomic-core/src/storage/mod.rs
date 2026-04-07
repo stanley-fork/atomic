@@ -306,9 +306,9 @@ dispatch! {
         => sqlite: get_embedding_dimension_sync, pg_trait: ChunkStore, pg_method: get_embedding_dimension;
     fn recreate_vector_index_sync(&self, dimension: usize) -> Result<(), AtomicCoreError>
         => sqlite: recreate_vector_index_sync, pg_trait: ChunkStore, pg_method: recreate_vector_index;
-    fn claim_pending_reembedding_sync(&self) -> Result<Vec<(String, String)>, AtomicCoreError>
+    fn claim_pending_reembedding_sync(&self) -> Result<Vec<String>, AtomicCoreError>
         => sqlite: claim_pending_reembedding_sync, pg_trait: ChunkStore, pg_method: claim_pending_reembedding;
-    fn claim_all_for_reembedding_sync(&self) -> Result<Vec<(String, String)>, AtomicCoreError>
+    fn claim_all_for_reembedding_sync(&self) -> Result<Vec<String>, AtomicCoreError>
         => sqlite: claim_all_for_reembedding_sync, pg_trait: ChunkStore, pg_method: claim_all_for_reembedding;
 
     // ---- SearchStore ----

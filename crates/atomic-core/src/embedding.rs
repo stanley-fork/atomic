@@ -121,12 +121,25 @@ pub struct EmbedError {
 /// if a provider rejects the batch size.
 const EMBEDDING_BATCH_SIZE: usize = 30;
 
+/// Number of atoms to process per group in the embedding pipeline.
+/// Bounds peak memory by limiting how much content, chunks, and embedding
+/// results are held simultaneously.
+const ATOM_GROUP_SIZE: usize = 200;
+
 /// Metadata for a chunk awaiting embedding
 #[derive(Clone)]
 struct PendingChunk {
     atom_id: String,
     chunk_index: usize,
     content: String,
+}
+
+/// Input source for the embedding batch pipeline.
+pub enum AtomInput {
+    /// Content already loaded (e.g. from import or bulk create)
+    Preloaded(Vec<(String, String)>),
+    /// Only atom IDs — content will be loaded per-group from storage
+    IdsOnly(Vec<String>),
 }
 
 /// Embed a list of chunks in adaptive batches.
@@ -748,38 +761,47 @@ pub fn spawn_embedding_task_single_with_settings<F>(
 /// Set skip_tagging=true when re-embedding due to model/provider change (tags are preserved).
 pub async fn process_embedding_batch<F>(
     storage: StorageBackend,
-    atoms: Vec<(String, String)>,
+    input: AtomInput,
     skip_tagging: bool,
     on_event: F,
 ) where
     F: Fn(EmbeddingEvent) + Send + Sync + Clone + 'static,
 {
-    process_embedding_batch_inner(storage, atoms, skip_tagging, on_event, None).await
+    process_embedding_batch_inner(storage, input, skip_tagging, on_event, None).await
 }
 
 /// Process embedding batch with externally-provided settings (from registry).
 pub async fn process_embedding_batch_with_settings<F>(
     storage: StorageBackend,
-    atoms: Vec<(String, String)>,
+    input: AtomInput,
     skip_tagging: bool,
     on_event: F,
     settings_map: HashMap<String, String>,
 ) where
     F: Fn(EmbeddingEvent) + Send + Sync + Clone + 'static,
 {
-    process_embedding_batch_inner(storage, atoms, skip_tagging, on_event, Some(settings_map)).await
+    process_embedding_batch_inner(storage, input, skip_tagging, on_event, Some(settings_map)).await
 }
 
 async fn process_embedding_batch_inner<F>(
     storage: StorageBackend,
-    atoms: Vec<(String, String)>,
+    input: AtomInput,
     skip_tagging: bool,
     on_event: F,
     external_settings: Option<HashMap<String, String>>,
 ) where
     F: Fn(EmbeddingEvent) + Send + Sync + Clone + 'static,
 {
-    let total_count = atoms.len();
+    // Extract all atom IDs and optional preloaded content
+    let (all_atom_ids, preloaded_content): (Vec<String>, Option<Vec<(String, String)>>) = match input {
+        AtomInput::Preloaded(atoms) => {
+            let ids = atoms.iter().map(|(id, _)| id.clone()).collect();
+            (ids, Some(atoms))
+        }
+        AtomInput::IdsOnly(ids) => (ids, None),
+    };
+
+    let total_count = all_atom_ids.len();
     if total_count == 0 {
         return;
     }
@@ -799,10 +821,11 @@ async fn process_embedding_batch_inner<F>(
 
     tracing::info!(
         total_count,
-        "Starting pipeline for atoms (cross-atom batching + concurrent tagging)"
+        "Starting pipeline for atoms (grouped processing, group_size={})",
+        ATOM_GROUP_SIZE,
     );
 
-    // === Phase 1a: Get settings ===
+    // === Get settings ===
     let provider_config = {
         let settings_map = match external_settings {
             Some(ref s) => s.clone(),
@@ -828,197 +851,236 @@ async fn process_embedding_batch_inner<F>(
         provider_config
     };
 
-    // === Phase 1b: Clean up old chunks ===
-    {
-        let atom_ids: Vec<String> = atoms.iter().map(|(id, _)| id.clone()).collect();
-        if let Err(e) = storage.delete_chunks_batch_sync(&atom_ids) {
-            tracing::error!(error = %e, "Failed to clean up old chunks");
-            return;
-        }
-        tracing::info!(total_count, "DB cleanup complete for atoms");
+    // === Clean up old chunks for all atoms ===
+    if let Err(e) = storage.delete_chunks_batch_sync(&all_atom_ids) {
+        tracing::error!(error = %e, "Failed to clean up old chunks");
+        return;
     }
+    tracing::info!(total_count, "DB cleanup complete for atoms");
 
-    // === Phase 1c: Chunk content (NO lock — CPU only) ===
-    let mut all_chunks: Vec<PendingChunk> = Vec::new();
-    let mut empty_atom_ids: Vec<String> = Vec::new();
+    // === Shared tagging state (fire-and-forget with atomic counter) ===
+    let tagging_counter = Arc::new(AtomicUsize::new(0));
+    let tagging_remaining = Arc::new(AtomicUsize::new(0));
+    let tagging_done_notify = Arc::new(tokio::sync::Notify::new());
 
-    for (i, (atom_id, content)) in atoms.iter().enumerate() {
-        let chunks = chunk_content(content);
-        if chunks.is_empty() {
-            empty_atom_ids.push(atom_id.clone());
+    // === Process atoms in bounded groups ===
+    let mut completed_atom_ids: Vec<String> = Vec::new();
+    let mut atoms_processed = 0usize;
+
+    // Build an iterator of (id, content) pairs per group.
+    // For Preloaded: chunk the Vec directly.
+    // For IdsOnly: load content from DB per group.
+    let num_groups = (total_count + ATOM_GROUP_SIZE - 1) / ATOM_GROUP_SIZE;
+
+    // Consume preloaded content into an owned iterator we can drain per-group
+    let mut preloaded_iter = preloaded_content.map(|v| v.into_iter());
+
+    for group_idx in 0..num_groups {
+        let group_start = group_idx * ATOM_GROUP_SIZE;
+        let group_end = (group_start + ATOM_GROUP_SIZE).min(total_count);
+        let group_size = group_end - group_start;
+
+        // Get (id, content) pairs for this group
+        let group_atoms: Vec<(String, String)> = if let Some(ref mut iter) = preloaded_iter {
+            // Preloaded: take the next group_size items (drains from the Vec)
+            iter.by_ref().take(group_size).collect()
         } else {
-            for (index, chunk) in chunks.into_iter().enumerate() {
-                all_chunks.push(PendingChunk {
+            // IdsOnly: load content from DB for this group
+            let group_ids = &all_atom_ids[group_start..group_end];
+            match storage.get_atom_contents_batch_impl(group_ids) {
+                Ok(pairs) => pairs,
+                Err(e) => {
+                    tracing::error!(error = %e, group = group_idx + 1, "Failed to load atom content for group");
+                    // Mark all atoms in this group as failed
+                    for id in group_ids {
+                        storage.set_embedding_status_sync(id, "failed", Some(&e.to_string())).ok();
+                        on_event(EmbeddingEvent::EmbeddingFailed {
+                            atom_id: id.clone(),
+                            error: format!("Failed to load content: {}", e),
+                        });
+                    }
+                    atoms_processed += group_size;
+                    continue;
+                }
+            }
+        };
+
+        tracing::info!(
+            group = group_idx + 1,
+            num_groups,
+            group_atoms = group_atoms.len(),
+            "Processing atom group"
+        );
+
+        // --- Chunk this group ---
+        let mut group_chunks: Vec<PendingChunk> = Vec::new();
+        for (atom_id, content) in &group_atoms {
+            let chunks = chunk_content(content);
+            if chunks.is_empty() {
+                storage.set_embedding_status_sync(atom_id, "complete", None).ok();
+                storage.set_tagging_status_sync(atom_id, "skipped", None).ok();
+                on_event(EmbeddingEvent::EmbeddingComplete {
                     atom_id: atom_id.clone(),
-                    chunk_index: index,
-                    content: chunk,
+                });
+            } else {
+                for (index, chunk) in chunks.into_iter().enumerate() {
+                    group_chunks.push(PendingChunk {
+                        atom_id: atom_id.clone(),
+                        chunk_index: index,
+                        content: chunk,
+                    });
+                }
+            }
+        }
+
+        if emit_progress {
+            atoms_processed += group_size;
+            on_event(EmbeddingEvent::BatchProgress {
+                batch_id: batch_id.clone(),
+                phase: "embedding".to_string(),
+                completed: atoms_processed,
+                total: total_count,
+            });
+        }
+
+        // --- Embed this group's chunks ---
+        if !group_chunks.is_empty() {
+            let (embedded_chunks, failed_atoms) =
+                embed_chunks_batched(&provider_config, group_chunks).await;
+
+            // --- Store results immediately ---
+            // Group by atom_id, consuming the embedded results
+            let mut by_atom: HashMap<String, Vec<(String, Vec<f32>)>> = HashMap::new();
+            for (chunk, embedding) in embedded_chunks {
+                by_atom
+                    .entry(chunk.atom_id)
+                    .or_default()
+                    .push((chunk.content, embedding));
+            }
+
+            for (atom_id, chunks_with_embeddings) in &by_atom {
+                match storage.save_chunks_and_embeddings_sync(atom_id, chunks_with_embeddings) {
+                    Ok(()) => {
+                        storage.set_embedding_status_sync(atom_id, "complete", None).ok();
+                        completed_atom_ids.push(atom_id.clone());
+                        on_event(EmbeddingEvent::EmbeddingComplete {
+                            atom_id: atom_id.clone(),
+                        });
+                    }
+                    Err(_) => {
+                        storage.set_embedding_status_sync(atom_id, "failed", Some("Failed to store embeddings in DB")).ok();
+                        on_event(EmbeddingEvent::EmbeddingFailed {
+                            atom_id: atom_id.clone(),
+                            error: "Failed to store embeddings in DB".to_string(),
+                        });
+                    }
+                }
+            }
+
+            // Mark atoms that failed embedding API calls
+            for (atom_id, error) in &failed_atoms {
+                storage.set_embedding_status_sync(atom_id, "failed", Some(error)).ok();
+                on_event(EmbeddingEvent::EmbeddingFailed {
+                    atom_id: atom_id.clone(),
+                    error: error.clone(),
+                });
+            }
+
+            if emit_progress {
+                on_event(EmbeddingEvent::BatchProgress {
+                    batch_id: batch_id.clone(),
+                    phase: "storing".to_string(),
+                    completed: completed_atom_ids.len(),
+                    total: total_count,
                 });
             }
         }
 
-        if (i + 1) % 500 == 0 {
-            tracing::info!(progress = i + 1, total_count, "Chunking progress");
-        }
-    }
+        // --- Spawn tagging tasks for this group (fire-and-forget) ---
+        if !skip_tagging {
+            tagging_remaining.fetch_add(group_atoms.len(), Ordering::Relaxed);
+            for (atom_id, _) in group_atoms {
+                let storage = storage.clone();
+                let on_event = on_event.clone();
+                let settings = external_settings.clone();
+                let counter = tagging_counter.clone();
+                let remaining = tagging_remaining.clone();
+                let notify = tagging_done_notify.clone();
+                let batch_id = batch_id.clone();
+                let should_emit = emit_progress;
+                let tagging_total = total_count;
 
-    // Mark empty atoms as complete
-    if !empty_atom_ids.is_empty() {
-        for atom_id in &empty_atom_ids {
-            storage.set_embedding_status_sync(atom_id, "complete", None).ok();
-            storage.set_tagging_status_sync(atom_id, "skipped", None).ok();
-            on_event(EmbeddingEvent::EmbeddingComplete {
-                atom_id: atom_id.clone(),
-            });
-        }
-    }
+                tokio::spawn(async move {
+                    let _permit = crate::executor::LLM_SEMAPHORE
+                        .acquire()
+                        .await
+                        .expect("Semaphore closed unexpectedly");
 
-    tracing::info!(
-        atoms = total_count,
-        chunks = all_chunks.len(),
-        "Pre-chunked atoms into chunks"
-    );
+                    let result = match settings {
+                        Some(s) => process_tagging_only_with_settings(&storage, &atom_id, s).await,
+                        None => process_tagging_only(&storage, &atom_id).await,
+                    };
 
-    if emit_progress {
-        on_event(EmbeddingEvent::BatchProgress {
-            batch_id: batch_id.clone(),
-            phase: "embedding".to_string(),
-            completed: 0,
-            total: total_count,
-        });
-    }
-
-    // === Phase 2: Spawn tagging tasks concurrently (independent of embedding) ===
-    let mut tagging_tasks = Vec::new();
-    let tagging_counter = Arc::new(AtomicUsize::new(0));
-    if !skip_tagging {
-        let tagging_total = atoms.len();
-        for (atom_id, _) in &atoms {
-            let storage = storage.clone();
-            let atom_id = atom_id.clone();
-            let on_event = on_event.clone();
-            let settings = external_settings.clone();
-            let counter = tagging_counter.clone();
-            let batch_id = batch_id.clone();
-            let should_emit = emit_progress;
-
-            let task = tokio::spawn(async move {
-                let _permit = crate::executor::LLM_SEMAPHORE
-                    .acquire()
-                    .await
-                    .expect("Semaphore closed unexpectedly");
-
-                let result = match settings {
-                    Some(s) => process_tagging_only_with_settings(&storage, &atom_id, s).await,
-                    None => process_tagging_only(&storage, &atom_id).await,
-                };
-
-                let event = match result {
-                    Ok((tags_extracted, new_tags_created)) => EmbeddingEvent::TaggingComplete {
-                        atom_id: atom_id.clone(),
-                        tags_extracted,
-                        new_tags_created,
-                    },
-                    Err(e) => {
-                        storage.set_tagging_status_sync(&atom_id, "failed", Some(&e)).ok();
-                        EmbeddingEvent::TaggingFailed {
+                    let event = match result {
+                        Ok((tags_extracted, new_tags_created)) => EmbeddingEvent::TaggingComplete {
                             atom_id: atom_id.clone(),
-                            error: e,
+                            tags_extracted,
+                            new_tags_created,
+                        },
+                        Err(e) => {
+                            storage.set_tagging_status_sync(&atom_id, "failed", Some(&e)).ok();
+                            EmbeddingEvent::TaggingFailed {
+                                atom_id: atom_id.clone(),
+                                error: e,
+                            }
+                        }
+                    };
+
+                    on_event(event);
+
+                    // Emit tagging progress every 5 atoms
+                    if should_emit {
+                        let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                        if done % 5 == 0 || done == tagging_total {
+                            on_event(EmbeddingEvent::BatchProgress {
+                                batch_id: batch_id.clone(),
+                                phase: "tagging".to_string(),
+                                completed: done,
+                                total: tagging_total,
+                            });
                         }
                     }
-                };
 
-                on_event(event);
-
-                // Emit tagging progress every 5 atoms
-                if should_emit {
-                    let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
-                    if done % 5 == 0 || done == tagging_total {
-                        on_event(EmbeddingEvent::BatchProgress {
-                            batch_id: batch_id.clone(),
-                            phase: "tagging".to_string(),
-                            completed: done,
-                            total: tagging_total,
-                        });
+                    // Signal completion
+                    if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+                        notify.notify_one();
                     }
-                }
-            });
-            tagging_tasks.push(task);
-        }
-    }
-
-    // === Phase 3: Cross-atom batched embedding API calls ===
-    let (embedded_chunks, failed_atoms) =
-        embed_chunks_batched(&provider_config, all_chunks).await;
-
-    // === Phase 4: Store results in DB per-atom ===
-    let mut completed_atom_ids = Vec::new();
-    {
-        // Group embedded chunks by atom_id
-        let mut by_atom: HashMap<String, Vec<(usize, String, Vec<f32>)>> = HashMap::new();
-        for (chunk, embedding) in embedded_chunks {
-            by_atom
-                .entry(chunk.atom_id.clone())
-                .or_default()
-                .push((chunk.chunk_index, chunk.content, embedding));
-        }
-
-        // Store successful embeddings
-        let mut stored_count = 0usize;
-        for (atom_id, chunks) in &by_atom {
-            let chunks_with_embeddings: Vec<(String, Vec<f32>)> = chunks
-                .iter()
-                .map(|(_, content, embedding)| (content.clone(), embedding.clone()))
-                .collect();
-
-            match storage.save_chunks_and_embeddings_sync(atom_id, &chunks_with_embeddings) {
-                Ok(()) => {
-                    storage.set_embedding_status_sync(atom_id, "complete", None).ok();
-                    completed_atom_ids.push(atom_id.clone());
-                    stored_count += 1;
-                    on_event(EmbeddingEvent::EmbeddingComplete {
-                        atom_id: atom_id.clone(),
-                    });
-                    if emit_progress && stored_count % 10 == 0 {
-                        on_event(EmbeddingEvent::BatchProgress {
-                            batch_id: batch_id.clone(),
-                            phase: "storing".to_string(),
-                            completed: stored_count,
-                            total: total_count,
-                        });
-                    }
-                }
-                Err(_) => {
-                    storage.set_embedding_status_sync(atom_id, "failed", Some("Failed to store embeddings in DB")).ok();
-                    stored_count += 1;
-                    on_event(EmbeddingEvent::EmbeddingFailed {
-                        atom_id: atom_id.clone(),
-                        error: "Failed to store embeddings in DB".to_string(),
-                    });
-                }
+                });
             }
         }
 
-        // Mark atoms that failed embedding API calls
-        for (atom_id, error) in &failed_atoms {
-            storage.set_embedding_status_sync(atom_id, "failed", Some(error)).ok();
-            on_event(EmbeddingEvent::EmbeddingFailed {
-                atom_id: atom_id.clone(),
-                error: error.clone(),
-            });
-        }
-
-        tracing::info!(
-            succeeded = completed_atom_ids.len(),
-            failed = failed_atoms.len(),
-            "Embeddings stored"
-        );
-
-        // Rebuild FTS index to include all new chunks
-        storage.rebuild_fts_index_sync().ok();
+        // group_atoms, group_chunks, embedded_chunks, by_atom are all dropped here
     }
 
-    // === Phase 4b: Compute semantic edges ===
+    tracing::info!(
+        succeeded = completed_atom_ids.len(),
+        total = total_count,
+        "All groups processed, embeddings stored"
+    );
+
+    // Rebuild FTS index once after all groups
+    storage.rebuild_fts_index_sync().ok();
+
+    // === Compute semantic edges ===
     if total_count > 1 && !completed_atom_ids.is_empty() {
+        if emit_progress {
+            on_event(EmbeddingEvent::BatchProgress {
+                batch_id: batch_id.clone(),
+                phase: "edges".to_string(),
+                completed: 0,
+                total: completed_atom_ids.len(),
+            });
+        }
         tracing::info!(
             count = completed_atom_ids.len(),
             "Computing semantic edges for atoms"
@@ -1043,9 +1105,8 @@ async fn process_embedding_batch_inner<F>(
         );
     }
 
-    // === Phase 4c: Recompute tag centroid embeddings for affected tags ===
+    // === Recompute tag centroid embeddings for affected tags ===
     if !completed_atom_ids.is_empty() {
-        // Collect all unique tag IDs affected by the embedded atoms
         let mut affected_tag_ids: Vec<String> = Vec::new();
         for atom_id in &completed_atom_ids {
             if let Ok(ids) = storage.get_atom_tag_ids_impl(atom_id) {
@@ -1072,9 +1133,9 @@ async fn process_embedding_batch_inner<F>(
         });
     }
 
-    // === Phase 5: Wait for tagging to complete ===
-    for task in tagging_tasks {
-        let _ = task.await;
+    // === Wait for tagging to complete ===
+    while !skip_tagging && tagging_remaining.load(Ordering::Acquire) > 0 {
+        tagging_done_notify.notified().await;
     }
 
     if emit_progress {
@@ -1318,17 +1379,18 @@ where
                 .await
                 .expect("Embedding batch semaphore closed unexpectedly");
 
+            let input = AtomInput::Preloaded(pending_atoms);
             match settings {
                 Some(s) => process_embedding_batch_with_settings(
                     storage,
-                    pending_atoms,
+                    input,
                     false,
                     on_event,
                     s,
                 ).await,
                 None => process_embedding_batch(
                     storage,
-                    pending_atoms,
+                    input,
                     false,
                     on_event,
                 ).await,

@@ -904,31 +904,31 @@ impl ChunkStore for PostgresStorage {
         Ok(())
     }
 
-    async fn claim_pending_reembedding(&self) -> StorageResult<Vec<(String, String)>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
+    async fn claim_pending_reembedding(&self) -> StorageResult<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
             "UPDATE atoms SET embedding_status = 'processing'
              WHERE embedding_status IN ('pending', 'processing')
              AND db_id = $1
-             RETURNING id, content",
+             RETURNING id",
         )
         .bind(&self.db_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
-        Ok(rows)
+        Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
-    async fn claim_all_for_reembedding(&self) -> StorageResult<Vec<(String, String)>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
+    async fn claim_all_for_reembedding(&self) -> StorageResult<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
             "UPDATE atoms SET embedding_status = 'processing'
              WHERE db_id = $1
-             RETURNING id, content",
+             RETURNING id",
         )
         .bind(&self.db_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
-        Ok(rows)
+        Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 }
 

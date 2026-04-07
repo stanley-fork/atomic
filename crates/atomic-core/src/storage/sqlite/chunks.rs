@@ -466,7 +466,7 @@ impl SqliteStorage {
         crate::db::recreate_vec_chunks_with_dimension(&conn, dimension)
     }
 
-    pub(crate) fn claim_pending_reembedding_sync(&self) -> StorageResult<Vec<(String, String)>> {
+    pub(crate) fn claim_pending_reembedding_sync(&self) -> StorageResult<Vec<String>> {
         let conn = self
             .db
             .conn
@@ -475,15 +475,15 @@ impl SqliteStorage {
         let mut stmt = conn.prepare(
             "UPDATE atoms SET embedding_status = 'processing'
              WHERE embedding_status IN ('pending', 'processing')
-             RETURNING id, content",
+             RETURNING id",
         )?;
         let results = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .query_map([], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(results)
     }
 
-    pub(crate) fn claim_all_for_reembedding_sync(&self) -> StorageResult<Vec<(String, String)>> {
+    pub(crate) fn claim_all_for_reembedding_sync(&self) -> StorageResult<Vec<String>> {
         let conn = self
             .db
             .conn
@@ -491,10 +491,10 @@ impl SqliteStorage {
             .map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
         let mut stmt = conn.prepare(
             "UPDATE atoms SET embedding_status = 'processing'
-             RETURNING id, content",
+             RETURNING id",
         )?;
         let results = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .query_map([], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(results)
     }
@@ -690,11 +690,11 @@ impl ChunkStore for SqliteStorage {
         self.recreate_vector_index_sync(dimension)
     }
 
-    async fn claim_pending_reembedding(&self) -> StorageResult<Vec<(String, String)>> {
+    async fn claim_pending_reembedding(&self) -> StorageResult<Vec<String>> {
         self.claim_pending_reembedding_sync()
     }
 
-    async fn claim_all_for_reembedding(&self) -> StorageResult<Vec<(String, String)>> {
+    async fn claim_all_for_reembedding(&self) -> StorageResult<Vec<String>> {
         self.claim_all_for_reembedding_sync()
     }
 }
