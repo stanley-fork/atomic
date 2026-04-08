@@ -189,6 +189,7 @@ export const useUIStore = create<UIStore>()(
           return {
             readerState: { atomId, highlightText: highlightText || null },
             overlayNav: { stack, index: stack.length - 1 },
+            localGraph: { ...state.localGraph, isOpen: false },
           };
         });
       },

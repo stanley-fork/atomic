@@ -77,7 +77,7 @@ export function AtomReader({ atomId, highlightText }: AtomReaderProps) {
         clearTimeout(loadingTimer);
         setAtom(fetchedAtom);
         setIsLoadingAtom(false);
-        // atom loaded
+        lastFetchedAt.current = fetchedAtom?.updated_at ?? null;
       })
       .catch((error) => {
         clearTimeout(loadingTimer);
@@ -92,8 +92,10 @@ export function AtomReader({ atomId, highlightText }: AtomReaderProps) {
 
   // Re-fetch when store summary changes (e.g., after tag extraction)
   const storeAtomUpdatedAt = storeAtom?.updated_at;
+  const lastFetchedAt = useRef<string | null>(null);
   useEffect(() => {
-    if (storeAtomUpdatedAt && !isLoadingAtom) {
+    if (storeAtomUpdatedAt && !isLoadingAtom && storeAtomUpdatedAt !== lastFetchedAt.current) {
+      lastFetchedAt.current = storeAtomUpdatedAt;
       getTransport().invoke<AtomWithTags | null>('get_atom_by_id', { id: atomId })
         .then((fetchedAtom) => {
           if (fetchedAtom) setAtom(fetchedAtom);
