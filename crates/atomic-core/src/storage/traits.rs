@@ -331,6 +331,20 @@ pub trait ChunkStore: Send + Sync {
     /// Claim ALL atoms for re-embedding regardless of current status.
     /// Sets status to 'processing' and returns atom IDs.
     async fn claim_all_for_reembedding(&self) -> StorageResult<Vec<String>>;
+
+    /// Atomically claim atoms that need edge computation: sets edges_status to 'processing'
+    /// and returns their IDs.
+    async fn claim_pending_edges(&self, limit: i32) -> StorageResult<Vec<String>>;
+
+    /// Mark edges_status for a batch of atoms.
+    async fn set_edges_status_batch(
+        &self,
+        atom_ids: &[String],
+        status: &str,
+    ) -> StorageResult<()>;
+
+    /// Count atoms with pending edge computation.
+    async fn count_pending_edges(&self) -> StorageResult<i32>;
 }
 
 // ==================== Search Storage ====================

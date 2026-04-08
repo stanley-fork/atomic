@@ -1154,6 +1154,13 @@ impl AtomicCore {
         }
     }
 
+    /// Process all atoms with pending edge computation in batches.
+    /// Runs in the background with checkpointing so it survives restarts.
+    pub fn process_pending_edges(&self) -> Result<i32, AtomicCoreError> {
+        embedding::process_pending_edges(self.storage.clone())
+            .map_err(|e| AtomicCoreError::Embedding(e))
+    }
+
     /// Reset atoms stuck in 'processing' state back to 'pending'
     pub fn reset_stuck_processing(&self) -> Result<i32, AtomicCoreError> {
         self.storage.reset_stuck_processing_sync()

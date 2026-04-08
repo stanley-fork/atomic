@@ -259,6 +259,12 @@ async fn run_server(
                 Ok(_) => {}
                 Err(e) => tracing::warn!(db = %db_info.name, error = %e, "failed to start pending tagging"),
             }
+
+            match db_core.process_pending_edges() {
+                Ok(count) if count > 0 => tracing::info!(db = %db_info.name, count = count, "processing pending edge computation in background"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(db = %db_info.name, error = %e, "failed to start pending edge computation"),
+            }
         }
     }
 

@@ -380,6 +380,8 @@ async fn process_embedding_only_inner(
                         "Created semantic edges for atom"
                     );
                 }
+                // Mark edges complete so this atom isn't reprocessed on startup
+                storage.set_edges_status_batch_sync(&[atom_id.to_string()], "complete").ok();
             }
             Err(e) => {
                 tracing::warn!(
@@ -1071,38 +1073,13 @@ async fn process_embedding_batch_inner<F>(
     // Rebuild FTS index once after all groups
     storage.rebuild_fts_index_sync().ok();
 
-    // === Compute semantic edges ===
-    if total_count > 1 && !completed_atom_ids.is_empty() {
-        if emit_progress {
-            on_event(EmbeddingEvent::BatchProgress {
-                batch_id: batch_id.clone(),
-                phase: "edges".to_string(),
-                completed: 0,
-                total: completed_atom_ids.len(),
-            });
+    // === Mark atoms for edge computation ===
+    // Edge computation now runs as a separate batched pipeline (process_pending_edges)
+    // that checkpoints progress, so it can survive restarts.
+    if !completed_atom_ids.is_empty() {
+        if let Err(e) = storage.set_edges_status_batch_sync(&completed_atom_ids, "pending") {
+            tracing::warn!(error = %e, "Failed to mark atoms for edge computation");
         }
-        tracing::info!(
-            count = completed_atom_ids.len(),
-            "Computing semantic edges for atoms"
-        );
-        let mut total_edges = 0;
-        for (i, atom_id) in completed_atom_ids.iter().enumerate() {
-            match storage.compute_semantic_edges_for_atom_sync(atom_id, 0.5, 15) {
-                Ok(count) => total_edges += count,
-                Err(e) => {
-                    tracing::warn!(atom_id = %atom_id, error = %e, "Failed to compute edges for atom")
-                }
-            }
-
-            if (i + 1) % 1000 == 0 {
-                tracing::info!(progress = i + 1, total = completed_atom_ids.len(), total_edges, "Edge computation progress");
-            }
-        }
-        tracing::info!(
-            total_edges,
-            atoms = completed_atom_ids.len(),
-            "Created total semantic edges for atoms"
-        );
     }
 
     // === Recompute tag centroid embeddings for affected tags ===
@@ -1145,6 +1122,15 @@ async fn process_embedding_batch_inner<F>(
             completed: total_count,
             total: total_count,
         });
+    }
+
+    // === Kick off edge computation in the background ===
+    if !completed_atom_ids.is_empty() {
+        match process_pending_edges(storage) {
+            Ok(count) if count > 0 => tracing::info!(count, "Started background edge computation"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "Failed to start edge computation"),
+        }
     }
 
     if skip_tagging {
@@ -1660,6 +1646,75 @@ pub fn compute_tag_embeddings_batch(
     }
 
     Ok(())
+}
+
+/// Max atoms to process per edge computation batch.
+const EDGE_BATCH_SIZE: i32 = 50;
+
+/// Process all atoms with pending edge computation in batches.
+///
+/// Claims atoms in batches, computes edges, marks them complete, and repeats.
+/// Each batch is checkpointed so progress survives restarts.
+/// Returns the total number of atoms processed.
+pub fn process_pending_edges(storage: StorageBackend) -> Result<i32, String> {
+    let pending_count = storage.count_pending_edges_sync()
+        .map_err(|e| e.to_string())?;
+
+    if pending_count == 0 {
+        return Ok(0);
+    }
+
+    tracing::info!(count = pending_count, "Starting batched edge computation");
+
+    let storage_clone = storage.clone();
+    crate::executor::spawn(async move {
+        let mut total_processed = 0;
+        loop {
+            let batch = match storage_clone.claim_pending_edges_sync(EDGE_BATCH_SIZE) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to claim atoms for edge computation");
+                    break;
+                }
+            };
+
+            if batch.is_empty() {
+                break;
+            }
+
+            let batch_size = batch.len();
+            let mut batch_edges = 0;
+
+            for atom_id in &batch {
+                match storage_clone.compute_semantic_edges_for_atom_sync(atom_id, 0.5, 15) {
+                    Ok(count) => batch_edges += count,
+                    Err(e) => {
+                        tracing::warn!(atom_id = %atom_id, error = %e, "Failed to compute edges for atom");
+                    }
+                }
+            }
+
+            // Checkpoint: mark this batch complete before claiming the next
+            if let Err(e) = storage_clone.set_edges_status_batch_sync(&batch, "complete") {
+                tracing::error!(error = %e, "Failed to mark edges as complete");
+                break;
+            }
+
+            total_processed += batch_size;
+            tracing::info!(
+                batch_edges,
+                progress = total_processed,
+                "Edge computation batch complete"
+            );
+
+            // Yield to other tasks between batches
+            tokio::task::yield_now().await;
+        }
+
+        tracing::info!(total = total_processed, "Edge computation pipeline complete");
+    });
+
+    Ok(pending_count)
 }
 
 #[cfg(test)]

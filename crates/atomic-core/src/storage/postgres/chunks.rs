@@ -156,7 +156,20 @@ impl ChunkStore for PostgresStorage {
             ))
         })?;
 
-        Ok((embedding_result.rows_affected() + tagging_result.rows_affected()) as i32)
+        let edges_result = sqlx::query(
+            "UPDATE atoms SET edges_status = 'pending' WHERE edges_status = 'processing' AND db_id = $1",
+        )
+        .bind(&self.db_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            AtomicCoreError::DatabaseOperation(format!(
+                "Failed to reset stuck edges status: {}",
+                e
+            ))
+        })?;
+
+        Ok((embedding_result.rows_affected() + tagging_result.rows_affected() + edges_result.rows_affected()) as i32)
     }
 
     async fn reset_failed_embeddings(&self) -> StorageResult<i32> {
@@ -929,6 +942,49 @@ impl ChunkStore for PostgresStorage {
         .await
         .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    async fn claim_pending_edges(&self, limit: i32) -> StorageResult<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "UPDATE atoms SET edges_status = 'processing'
+             WHERE id IN (SELECT id FROM atoms WHERE edges_status = 'pending' AND embedding_status = 'complete' AND db_id = $2 LIMIT $1)
+             AND db_id = $2
+             RETURNING id",
+        )
+        .bind(limit)
+        .bind(&self.db_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    async fn set_edges_status_batch(
+        &self,
+        atom_ids: &[String],
+        status: &str,
+    ) -> StorageResult<()> {
+        for atom_id in atom_ids {
+            sqlx::query("UPDATE atoms SET edges_status = $1 WHERE id = $2 AND db_id = $3")
+                .bind(status)
+                .bind(atom_id)
+                .bind(&self.db_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    async fn count_pending_edges(&self) -> StorageResult<i32> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM atoms WHERE edges_status = 'pending' AND embedding_status = 'complete' AND db_id = $1",
+        )
+        .bind(&self.db_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
+        Ok(row.0 as i32)
     }
 }
 

@@ -199,7 +199,7 @@ impl Database {
     ///   1. Add a new `if version < N` block at the end (before the virtual-table section)
     ///   2. End the block with `PRAGMA user_version = N;`
     ///   3. Bump LATEST_VERSION
-    const LATEST_VERSION: i32 = 8;
+    const LATEST_VERSION: i32 = 10;
 
     pub fn run_migrations(conn: &Connection) -> Result<(), AtomicCoreError> {
         let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -595,6 +595,29 @@ impl Database {
                 PRAGMA user_version = 9;
                 "#,
             )?;
+        }
+
+        // --- V9 → V10: Track semantic edge computation status per atom ---
+        if version < 10 {
+            conn.execute_batch(
+                r#"
+                ALTER TABLE atoms ADD COLUMN edges_status TEXT DEFAULT 'pending';
+                CREATE INDEX IF NOT EXISTS idx_atoms_edges_status ON atoms(edges_status);
+                "#,
+            )?;
+            // Atoms that already have embeddings need edges computed
+            // (they may already have edges from before, but we treat them as pending
+            // so the batched pipeline can process them cleanly)
+            conn.execute(
+                "UPDATE atoms SET edges_status = 'pending' WHERE embedding_status = 'complete'",
+                [],
+            )?;
+            // Atoms without embeddings don't need edges yet
+            conn.execute(
+                "UPDATE atoms SET edges_status = 'none' WHERE embedding_status != 'complete'",
+                [],
+            )?;
+            conn.execute_batch("PRAGMA user_version = 10;")?;
         }
 
         // --- Triggers (recreated every startup to stay current) ---
