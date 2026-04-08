@@ -380,6 +380,8 @@ async fn process_embedding_only_inner(
                         "Created semantic edges for atom"
                     );
                 }
+                // Mark edges complete so this atom isn't reprocessed on startup
+                storage.set_edges_status_batch_sync(&[atom_id.to_string()], "complete").ok();
             }
             Err(e) => {
                 tracing::warn!(
@@ -1702,7 +1704,6 @@ pub fn process_pending_edges(storage: StorageBackend) -> Result<i32, String> {
             tracing::info!(
                 batch_edges,
                 progress = total_processed,
-                remaining = pending_count as usize - total_processed,
                 "Edge computation batch complete"
             );
 

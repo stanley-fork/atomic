@@ -156,7 +156,20 @@ impl ChunkStore for PostgresStorage {
             ))
         })?;
 
-        Ok((embedding_result.rows_affected() + tagging_result.rows_affected()) as i32)
+        let edges_result = sqlx::query(
+            "UPDATE atoms SET edges_status = 'pending' WHERE edges_status = 'processing' AND db_id = $1",
+        )
+        .bind(&self.db_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            AtomicCoreError::DatabaseOperation(format!(
+                "Failed to reset stuck edges status: {}",
+                e
+            ))
+        })?;
+
+        Ok((embedding_result.rows_affected() + tagging_result.rows_affected() + edges_result.rows_affected()) as i32)
     }
 
     async fn reset_failed_embeddings(&self) -> StorageResult<i32> {
