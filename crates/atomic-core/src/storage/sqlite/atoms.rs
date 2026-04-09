@@ -232,7 +232,27 @@ impl SqliteStorage {
         request: &UpdateAtomRequest,
         updated_at: &str,
     ) -> StorageResult<AtomWithTags> {
-        let embedding_status = "pending";
+        self.update_atom_inner(id, request, updated_at, true)
+    }
+
+    /// Content-only update: saves content/metadata but does NOT reset embedding_status.
+    /// Used by auto-save during inline editing.
+    pub(crate) fn update_atom_content_only_impl(
+        &self,
+        id: &str,
+        request: &UpdateAtomRequest,
+        updated_at: &str,
+    ) -> StorageResult<AtomWithTags> {
+        self.update_atom_inner(id, request, updated_at, false)
+    }
+
+    fn update_atom_inner(
+        &self,
+        id: &str,
+        request: &UpdateAtomRequest,
+        updated_at: &str,
+        reset_embedding_status: bool,
+    ) -> StorageResult<AtomWithTags> {
         let (title, snippet) = extract_title_and_snippet(&request.content, 300);
         let source = request.source_url.as_deref().map(parse_source);
 
@@ -246,22 +266,40 @@ impl SqliteStorage {
             conn.execute_batch("BEGIN")?;
 
             if let Err(e) = (|| -> Result<(), AtomicCoreError> {
-                conn.execute(
-                    "UPDATE atoms SET content = ?1, source_url = ?2, source = ?3, published_at = ?4, updated_at = ?5, embedding_status = ?6,
-                     title = ?7, snippet = ?8
-                     WHERE id = ?9",
-                    (
-                        &request.content,
-                        &request.source_url,
-                        &source,
-                        &request.published_at,
-                        updated_at,
-                        &embedding_status,
-                        &title,
-                        &snippet,
-                        id,
-                    ),
-                )?;
+                if reset_embedding_status {
+                    conn.execute(
+                        "UPDATE atoms SET content = ?1, source_url = ?2, source = ?3, published_at = ?4, updated_at = ?5, embedding_status = ?6,
+                         title = ?7, snippet = ?8
+                         WHERE id = ?9",
+                        (
+                            &request.content,
+                            &request.source_url,
+                            &source,
+                            &request.published_at,
+                            updated_at,
+                            "pending",
+                            &title,
+                            &snippet,
+                            id,
+                        ),
+                    )?;
+                } else {
+                    conn.execute(
+                        "UPDATE atoms SET content = ?1, source_url = ?2, source = ?3, published_at = ?4, updated_at = ?5,
+                         title = ?6, snippet = ?7
+                         WHERE id = ?8",
+                        (
+                            &request.content,
+                            &request.source_url,
+                            &source,
+                            &request.published_at,
+                            updated_at,
+                            &title,
+                            &snippet,
+                            id,
+                        ),
+                    )?;
+                }
 
                 if let Some(ref tag_ids) = request.tag_ids {
                     conn.execute("DELETE FROM atom_tags WHERE atom_id = ?1", [id])?;
@@ -1051,6 +1089,15 @@ impl AtomStore for SqliteStorage {
         updated_at: &str,
     ) -> StorageResult<AtomWithTags> {
         self.update_atom_impl(id, request, updated_at)
+    }
+
+    async fn update_atom_content_only(
+        &self,
+        id: &str,
+        request: &UpdateAtomRequest,
+        updated_at: &str,
+    ) -> StorageResult<AtomWithTags> {
+        self.update_atom_content_only_impl(id, request, updated_at)
     }
 
     async fn delete_atom(&self, id: &str) -> StorageResult<()> {

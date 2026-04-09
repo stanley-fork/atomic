@@ -29,7 +29,7 @@ export function Layout() {
   const toggleCommandPalette = useUIStore((state) => state.toggleCommandPalette);
   const closeCommandPalette = useUIStore((state) => state.closeCommandPalette);
   const openCommandPalette = useUIStore((state) => state.openCommandPalette);
-  const openDrawer = useUIStore((state) => state.openDrawer);
+  // openDrawer removed — new atom flow uses openReaderEditing
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -67,14 +67,17 @@ export function Layout() {
       // Cmd+N or Ctrl+N to create new atom (only when palette is closed)
       if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !commandPaletteOpen) {
         e.preventDefault();
-        openDrawer('editor');
+        const { createAtom } = useAtomsStore.getState();
+        createAtom('').then((newAtom) => {
+          useUIStore.getState().openReaderEditing(newAtom.id);
+        }).catch(console.error);
         return;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleCommandPalette, openCommandPalette, openDrawer, commandPaletteOpen]);
+  }, [toggleCommandPalette, openCommandPalette, commandPaletteOpen]);
 
   // Listen for custom settings event from command palette
   useEffect(() => {

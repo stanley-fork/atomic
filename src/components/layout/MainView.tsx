@@ -16,6 +16,7 @@ import { useAtomsStore } from '../../stores/atoms';
 import { useTagsStore } from '../../stores/tags';
 import { useUIStore } from '../../stores/ui';
 import { isTauri } from '../../lib/platform';
+import { readerEditorActions } from '../../lib/reader-editor-bridge';
 
 export function MainView() {
   const atoms = useAtomsStore(s => s.atoms);
@@ -44,7 +45,6 @@ export function MainView() {
   const leftPanelOpen = useUIStore(s => s.leftPanelOpen);
   const toggleLeftPanel = useUIStore(s => s.toggleLeftPanel);
   const setViewMode = useUIStore(s => s.setViewMode);
-  const openDrawer = useUIStore(s => s.openDrawer);
   const openReader = useUIStore(s => s.openReader);
   const readerState = useUIStore(s => s.readerState);
   const wikiReaderState = useUIStore(s => s.wikiReaderState);
@@ -55,7 +55,6 @@ export function MainView() {
   const overlayDismiss = useUIStore(s => s.overlayDismiss);
   const readerTheme = useUIStore(s => s.readerTheme);
   const toggleReaderTheme = useUIStore(s => s.toggleReaderTheme);
-
   const deleteAtom = useAtomsStore(s => s.deleteAtom);
   const fetchTags = useTagsStore(s => s.fetchTags);
 
@@ -142,9 +141,17 @@ export function MainView() {
     openReader(atomId, highlightText);
   }, [openReader, matchingChunkMap]);
 
-  const handleNewAtom = useCallback(() => {
-    openDrawer('editor');
-  }, [openDrawer]);
+  const createAtom = useAtomsStore(s => s.createAtom);
+  const openReaderEditing = useUIStore(s => s.openReaderEditing);
+
+  const handleNewAtom = useCallback(async () => {
+    try {
+      const newAtom = await createAtom('');
+      openReaderEditing(newAtom.id);
+    } catch (error) {
+      console.error('Failed to create atom:', error);
+    }
+  }, [createAtom, openReaderEditing]);
 
   const handleRetryEmbedding = useCallback(async (atomId: string) => {
     try {
@@ -203,7 +210,7 @@ export function MainView() {
         </button>
 
         {readerState.atomId || wikiReaderState.tagId || (localGraph.isOpen && localGraph.centerAtomId) ? (
-          /* Reader/Graph/Wiki titlebar — back/forward + dismiss */
+          /* Reader/Graph/Wiki titlebar */
           <>
             <div className="flex items-center gap-1">
               <button
@@ -215,51 +222,71 @@ export function MainView() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
-              <button
-                onClick={overlayBack}
-                disabled={overlayNav.index <= 0}
-                className={`p-1.5 rounded-md transition-colors ${overlayNav.index > 0 ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]' : 'text-[var(--color-text-tertiary)] cursor-default'}`}
-                title="Back"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-              <button
-                onClick={overlayForward}
-                disabled={overlayNav.index >= overlayNav.stack.length - 1}
-                className={`p-1.5 rounded-md transition-colors ${overlayNav.index < overlayNav.stack.length - 1 ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]' : 'text-[var(--color-text-tertiary)] cursor-default'}`}
-                title="Forward"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
+              {/* In edit mode: undo/redo. In view mode: back/forward */}
+              {readerState.atomId && readerState.editing ? (
+                <>
+                  <button
+                    onClick={() => readerEditorActions.current?.undo()}
+                    className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
+                    title="Undo (Cmd+Z)"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => readerEditorActions.current?.redo()}
+                    className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
+                    title="Redo (Cmd+Shift+Z)"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a5 5 0 00-5 5v2M21 10l-4-4M21 10l-4 4" />
+                    </svg>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={overlayBack}
+                    disabled={overlayNav.index <= 0}
+                    className={`p-1.5 rounded-md transition-colors ${overlayNav.index > 0 ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]' : 'text-[var(--color-text-tertiary)] cursor-default'}`}
+                    title="Back"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={overlayForward}
+                    disabled={overlayNav.index >= overlayNav.stack.length - 1}
+                    className={`p-1.5 rounded-md transition-colors ${overlayNav.index < overlayNav.stack.length - 1 ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]' : 'text-[var(--color-text-tertiary)] cursor-default'}`}
+                    title="Forward"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </>
+              )}
+              {/* Save status indicator */}
+              {readerState.editing && readerState.saveStatus !== 'idle' && (
+                <span className={`text-xs ml-1 ${
+                  readerState.saveStatus === 'saving' ? 'text-[var(--color-text-tertiary)]' :
+                  readerState.saveStatus === 'saved' ? 'text-green-500' :
+                  'text-red-500'
+                }`}>
+                  {readerState.saveStatus === 'saving' ? 'Saving...' :
+                   readerState.saveStatus === 'saved' ? 'Saved' : 'Save failed'}
+                </span>
+              )}
             </div>
 
             <div data-tauri-drag-region className="flex-1 h-full drag-region" />
 
-            {/* Action buttons — only for atom reader, not graph/wiki view */}
-            {readerState.atomId && !localGraph.isOpen && !wikiReaderState.tagId && (
+            {/* Action buttons for atom reader */}
+            {readerState.atomId && (
               <div className="flex items-center gap-1">
-                <button
-                  onClick={() => openDrawer('editor', readerState.atomId!)}
-                  className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
-                  title="Edit"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => setShowDeleteModal(true)}
-                  className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
-                  title="Delete"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+                {/* Theme toggle */}
                 <button
                   onClick={toggleReaderTheme}
                   className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
@@ -274,6 +301,39 @@ export function MainView() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
                     </svg>
                   )}
+                </button>
+                {/* Edit / Done toggle */}
+                <button
+                  onClick={() => readerState.editing
+                    ? readerEditorActions.current?.stopEditing()
+                    : readerEditorActions.current?.startEditing(0)
+                  }
+                  className={`p-1.5 rounded-md transition-colors ${
+                    readerState.editing
+                      ? 'text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20'
+                      : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
+                  }`}
+                  title={readerState.editing ? 'Done (Esc)' : 'Edit'}
+                >
+                  {readerState.editing ? (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  )}
+                </button>
+                {/* Delete */}
+                <button
+                  onClick={() => setShowDeleteModal(true)}
+                  className="p-1.5 rounded-md text-[var(--color-text-secondary)] hover:text-red-400 hover:bg-[var(--color-bg-hover)] transition-colors"
+                  title="Delete"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
                 </button>
               </div>
             )}
@@ -370,21 +430,6 @@ export function MainView() {
 
             <div data-tauri-drag-region className="flex-1 h-full drag-region" />
 
-            {/* Chat sidebar toggle — right-aligned */}
-            <button
-              onClick={handleOpenChat}
-              className={`hidden md:block p-1.5 rounded-md transition-colors ${
-                chatSidebarOpen
-                  ? 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
-                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
-              }`}
-              title={chatSidebarOpen ? "Hide chat" : "Show chat"}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-              </svg>
-            </button>
-
             {/* Filter toggle + atom count — right-aligned, hide for canvas/wiki */}
             {viewMode !== 'canvas' && viewMode !== 'wiki' && (
               <div className="flex items-center gap-2 shrink-0">
@@ -409,6 +454,21 @@ export function MainView() {
                 </span>
               </div>
             )}
+
+            {/* Chat sidebar toggle — right-aligned */}
+            <button
+              onClick={handleOpenChat}
+              className={`hidden md:block p-1.5 rounded-md transition-colors ${
+                chatSidebarOpen
+                  ? 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
+                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
+              }`}
+              title={chatSidebarOpen ? "Hide chat" : "Show chat"}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+            </button>
           </>
         )}
       </div>
@@ -434,7 +494,7 @@ export function MainView() {
         {localGraph.isOpen && localGraph.centerAtomId ? (
           <LocalGraphView />
         ) : readerState.atomId ? (
-          <AtomReader atomId={readerState.atomId} highlightText={readerState.highlightText} />
+          <AtomReader atomId={readerState.atomId} highlightText={readerState.highlightText} initialEditing={readerState.editing} />
         ) : wikiReaderState.tagId && wikiReaderState.tagName ? (
           <WikiReader tagId={wikiReaderState.tagId} tagName={wikiReaderState.tagName} />
         ) : viewMode === 'wiki' ? (

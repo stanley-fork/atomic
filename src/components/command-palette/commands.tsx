@@ -1,5 +1,6 @@
 import { getTransport } from '../../lib/transport';
 import { Command, CommandCategory } from './types';
+import { useAtomsStore } from '../../stores/atoms';
 import { useUIStore } from '../../stores/ui';
 import { useTagsStore } from '../../stores/tags';
 
@@ -136,7 +137,11 @@ export const commands: Command[] = [
     keywords: ['new', 'add', 'write', 'note', 'create', 'atom'],
     shortcut: '⌘N',
     icon: PlusIcon,
-    action: () => useUIStore.getState().openDrawer('editor'),
+    action: async () => {
+      const { createAtom } = useAtomsStore.getState();
+      const newAtom = await createAtom('');
+      useUIStore.getState().openReaderEditing(newAtom.id);
+    },
   },
   {
     id: 'search-atoms',

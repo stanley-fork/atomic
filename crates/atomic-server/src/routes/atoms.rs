@@ -298,6 +298,42 @@ pub async fn update_atom(
     }).await
 }
 
+/// Update atom content/metadata without triggering embedding or tagging pipeline.
+/// Used by auto-save during inline editing.
+#[utoipa::path(
+    put,
+    path = "/api/atoms/{id}/content",
+    params(
+        ("id" = String, Path, description = "Atom ID"),
+    ),
+    request_body = UpdateAtomRequest,
+    responses(
+        (status = 200, description = "Updated atom (no pipeline triggered)", body = AtomWithTags),
+        (status = 404, description = "Atom not found", body = ApiErrorResponse),
+    ),
+    tag = "atoms",
+)]
+pub async fn update_atom_content_only(
+    db: Db,
+    path: web::Path<String>,
+    body: web::Json<UpdateAtomRequest>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    let req = body.into_inner();
+    let core = db.0;
+    blocking_ok(move || {
+        core.update_atom_content_only(
+            &id,
+            atomic_core::UpdateAtomRequest {
+                content: req.content,
+                source_url: req.source_url,
+                published_at: req.published_at,
+                tag_ids: req.tag_ids,
+            },
+        )
+    }).await
+}
+
 #[utoipa::path(
     delete,
     path = "/api/atoms/{id}",

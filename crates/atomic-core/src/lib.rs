@@ -636,6 +636,19 @@ impl AtomicCore {
         Ok(atom_with_tags)
     }
 
+    /// Update an existing atom's content/metadata without triggering re-embedding or tagging.
+    /// Used by auto-save during inline editing to persist content frequently without
+    /// flooding the embedding pipeline. The full `update_atom` should be called when
+    /// the user finishes editing to trigger the pipeline.
+    pub fn update_atom_content_only(
+        &self,
+        id: &str,
+        request: UpdateAtomRequest,
+    ) -> Result<AtomWithTags, AtomicCoreError> {
+        let now = Utc::now().to_rfc3339();
+        self.storage.update_atom_content_only_impl(id, &request, &now)
+    }
+
     /// Delete an atom
     pub fn delete_atom(&self, id: &str) -> Result<(), AtomicCoreError> {
         self.storage.delete_atom_impl(id)

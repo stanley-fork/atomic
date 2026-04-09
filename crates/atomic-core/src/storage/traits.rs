@@ -55,6 +55,17 @@ pub trait AtomStore: Send + Sync {
         updated_at: &str,
     ) -> StorageResult<AtomWithTags>;
 
+    /// Update atom content/metadata without resetting embedding status.
+    /// Used by auto-save during inline editing. Defaults to regular update_atom.
+    async fn update_atom_content_only(
+        &self,
+        id: &str,
+        request: &UpdateAtomRequest,
+        updated_at: &str,
+    ) -> StorageResult<AtomWithTags> {
+        self.update_atom(id, request, updated_at).await
+    }
+
     /// Delete an atom and all associated data (tags, chunks, embeddings, edges).
     async fn delete_atom(&self, id: &str) -> StorageResult<()>;
 

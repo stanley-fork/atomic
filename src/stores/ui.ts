@@ -36,6 +36,8 @@ interface CanvasNavState {
 interface ReaderState {
   atomId: string | null;
   highlightText: string | null;
+  editing: boolean;
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 interface WikiReaderState {
@@ -93,6 +95,8 @@ interface UIStore {
   expandTagPath: (tagIds: string[]) => void;  // Expand all tags in path
   toggleTagExpanded: (tagId: string) => void;
   openReader: (atomId: string, highlightText?: string) => void;
+  openReaderEditing: (atomId: string) => void;
+  setReaderEditState: (editing: boolean, saveStatus?: 'idle' | 'saving' | 'saved' | 'error') => void;
   closeReader: () => void;
   openWikiReader: (tagId: string, tagName: string) => void;
   overlayNavigate: (entry: OverlayNavEntry) => void;
@@ -145,6 +149,8 @@ export const useUIStore = create<UIStore>()(
       readerState: {
         atomId: null,
         highlightText: null,
+        editing: false,
+        saveStatus: 'idle' as const,
       },
       wikiReaderState: {
         tagId: null,
@@ -211,7 +217,7 @@ export const useUIStore = create<UIStore>()(
           const isFirstOpen = state.overlayNav.index === -1;
           stack.push(entry);
           return {
-            readerState: { atomId, highlightText: highlightText || null },
+            readerState: { atomId, highlightText: highlightText || null, editing: false, saveStatus: 'idle' as const },
             wikiReaderState: { tagId: null, tagName: null },
             overlayNav: { stack, index: stack.length - 1 },
             localGraph: { ...state.localGraph, isOpen: false },
@@ -220,9 +226,30 @@ export const useUIStore = create<UIStore>()(
         });
       },
 
+      openReaderEditing: (atomId: string) => {
+        const entry: OverlayNavEntry = { type: 'reader', atomId };
+        set((state) => {
+          const stack = state.overlayNav.stack.slice(0, state.overlayNav.index + 1);
+          const isFirstOpen = state.overlayNav.index === -1;
+          stack.push(entry);
+          return {
+            readerState: { atomId, highlightText: null, editing: true, saveStatus: 'idle' as const },
+            wikiReaderState: { tagId: null, tagName: null },
+            overlayNav: { stack, index: stack.length - 1 },
+            localGraph: { ...state.localGraph, isOpen: false },
+            ...(isFirstOpen && state.leftPanelOpen ? { leftPanelOpen: false, leftPanelOpenBeforeReader: true } : {}),
+          };
+        });
+      },
+
+      setReaderEditState: (editing: boolean, saveStatus?: 'idle' | 'saving' | 'saved' | 'error') =>
+        set((state) => ({
+          readerState: { ...state.readerState, editing, ...(saveStatus !== undefined ? { saveStatus } : {}) },
+        })),
+
       closeReader: () =>
         set({
-          readerState: { atomId: null, highlightText: null },
+          readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
           wikiReaderState: { tagId: null, tagName: null },
           overlayNav: { stack: [], index: -1 },
         }),
@@ -235,7 +262,7 @@ export const useUIStore = create<UIStore>()(
           stack.push(entry);
           return {
             wikiReaderState: { tagId, tagName },
-            readerState: { atomId: null, highlightText: null },
+            readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
             overlayNav: { stack, index: stack.length - 1 },
             localGraph: { ...state.localGraph, isOpen: false },
             ...(isFirstOpen && state.leftPanelOpen ? { leftPanelOpen: false, leftPanelOpenBeforeReader: true } : {}),
@@ -252,21 +279,21 @@ export const useUIStore = create<UIStore>()(
           if (entry.type === 'reader') {
             return {
               overlayNav: { stack, index },
-              readerState: { atomId: entry.atomId, highlightText: entry.highlightText || null },
+              readerState: { atomId: entry.atomId, highlightText: entry.highlightText || null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: null, tagName: null },
               localGraph: { ...state.localGraph, isOpen: false },
             };
           } else if (entry.type === 'wiki') {
             return {
               overlayNav: { stack, index },
-              readerState: { atomId: null, highlightText: null },
+              readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: entry.tagId, tagName: entry.tagName },
               localGraph: { ...state.localGraph, isOpen: false },
             };
           } else {
             return {
               overlayNav: { stack, index },
-              readerState: { atomId: null, highlightText: null },
+              readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: null, tagName: null },
               localGraph: { isOpen: true, centerAtomId: entry.atomId, depth: 1, navigationHistory: [entry.atomId] },
             };
@@ -280,7 +307,7 @@ export const useUIStore = create<UIStore>()(
             // Nothing to go back to — dismiss
             return {
               overlayNav: { stack: [], index: -1 },
-              readerState: { atomId: null, highlightText: null },
+              readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: null, tagName: null },
               localGraph: { ...state.localGraph, isOpen: false },
               ...(state.leftPanelOpenBeforeReader ? { leftPanelOpen: true, leftPanelOpenBeforeReader: false } : {}),
@@ -290,21 +317,21 @@ export const useUIStore = create<UIStore>()(
           if (entry.type === 'reader') {
             return {
               overlayNav: { ...state.overlayNav, index: newIndex },
-              readerState: { atomId: entry.atomId, highlightText: entry.highlightText || null },
+              readerState: { atomId: entry.atomId, highlightText: entry.highlightText || null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: null, tagName: null },
               localGraph: { ...state.localGraph, isOpen: false },
             };
           } else if (entry.type === 'wiki') {
             return {
               overlayNav: { ...state.overlayNav, index: newIndex },
-              readerState: { atomId: null, highlightText: null },
+              readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: entry.tagId, tagName: entry.tagName },
               localGraph: { ...state.localGraph, isOpen: false },
             };
           } else {
             return {
               overlayNav: { ...state.overlayNav, index: newIndex },
-              readerState: { atomId: null, highlightText: null },
+              readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: null, tagName: null },
               localGraph: { isOpen: true, centerAtomId: entry.atomId, depth: 1, navigationHistory: [entry.atomId] },
             };
@@ -319,21 +346,21 @@ export const useUIStore = create<UIStore>()(
           if (entry.type === 'reader') {
             return {
               overlayNav: { ...state.overlayNav, index: newIndex },
-              readerState: { atomId: entry.atomId, highlightText: entry.highlightText || null },
+              readerState: { atomId: entry.atomId, highlightText: entry.highlightText || null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: null, tagName: null },
               localGraph: { ...state.localGraph, isOpen: false },
             };
           } else if (entry.type === 'wiki') {
             return {
               overlayNav: { ...state.overlayNav, index: newIndex },
-              readerState: { atomId: null, highlightText: null },
+              readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: entry.tagId, tagName: entry.tagName },
               localGraph: { ...state.localGraph, isOpen: false },
             };
           } else {
             return {
               overlayNav: { ...state.overlayNav, index: newIndex },
-              readerState: { atomId: null, highlightText: null },
+              readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
               wikiReaderState: { tagId: null, tagName: null },
               localGraph: { isOpen: true, centerAtomId: entry.atomId, depth: 1, navigationHistory: [entry.atomId] },
             };
@@ -343,7 +370,7 @@ export const useUIStore = create<UIStore>()(
       overlayDismiss: () =>
         set((state) => ({
           overlayNav: { stack: [], index: -1 },
-          readerState: { atomId: null, highlightText: null },
+          readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' as const },
           wikiReaderState: { tagId: null, tagName: null },
           localGraph: { ...state.localGraph, isOpen: false },
           ...(state.leftPanelOpenBeforeReader ? { leftPanelOpen: true, leftPanelOpenBeforeReader: false } : {}),

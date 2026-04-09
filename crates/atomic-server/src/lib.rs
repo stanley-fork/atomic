@@ -31,6 +31,7 @@ pub use utoipa_scalar::{Scalar, Servable};
         routes::atoms::get_atom,
         routes::atoms::create_atom,
         routes::atoms::update_atom,
+        routes::atoms::update_atom_content_only,
         routes::atoms::delete_atom,
         routes::atoms::bulk_create_atoms,
         routes::atoms::get_source_list,

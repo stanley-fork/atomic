@@ -77,6 +77,12 @@ export const COMMAND_MAP: Record<string, CommandSpec> = {
     argsMode: 'body',
     transformArgs: atomBody,
   },
+  update_atom_content_only: {
+    method: 'PUT',
+    path: (a) => `/api/atoms/${encodeURIComponent(a.id as string)}/content`,
+    argsMode: 'body',
+    transformArgs: atomBody,
+  },
   delete_atom: {
     method: 'DELETE',
     path: (a) => `/api/atoms/${encodeURIComponent(a.id as string)}`,

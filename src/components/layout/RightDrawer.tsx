@@ -1,8 +1,7 @@
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { getTransport } from '../../lib/transport';
 import { isTauri } from '../../lib/platform';
-import { AtomEditor } from '../atoms/AtomEditor';
 import { AtomViewer } from '../atoms/AtomViewer';
 import { WikiViewer } from '../wiki/WikiViewer';
 import { WikiListViewer } from '../wiki/WikiListViewer';
@@ -25,7 +24,7 @@ const perfLog = (label: string, startTime?: number) => {
 export function RightDrawer() {
   const drawerState = useUIStore(s => s.drawerState);
   const closeDrawer = useUIStore(s => s.closeDrawer);
-  const openDrawer = useUIStore(s => s.openDrawer);
+  // openDrawer removed — editor mode replaced by inline editing in AtomReader
   const drawerRef = useRef<HTMLDivElement>(null);
   const openTimeRef = useRef<number | null>(null);
 
@@ -119,12 +118,6 @@ export function RightDrawer() {
     };
   }, [isOpen]);
 
-  const handleEdit = useCallback(() => {
-    if (atomId) {
-      openDrawer('editor', atomId);
-    }
-  }, [atomId, openDrawer]);
-
   const renderContent = () => {
     const renderStart = performance.now();
     let result: React.ReactNode = null;
@@ -132,14 +125,6 @@ export function RightDrawer() {
 
     switch (mode) {
       case 'editor':
-        if (!isOpen) {
-          contentType = 'editor-closing';
-          result = null;
-          break;
-        }
-        contentType = 'editor';
-        result = <AtomEditor atomId={atomId} onClose={closeDrawer} />;
-        break;
       case 'viewer':
         // Don't render heavy content when drawer is closing - allows smooth animation
         if (!isOpen) {
@@ -166,7 +151,7 @@ export function RightDrawer() {
           break;
         }
         contentType = 'viewer-atom';
-        result = <AtomViewer atom={atom} onClose={closeDrawer} onEdit={handleEdit} highlightText={highlightText} />;
+        result = <AtomViewer atom={atom} onClose={closeDrawer} onEdit={() => {}} highlightText={highlightText} />;
         break;
       case 'wiki':
         if (!isOpen) {
