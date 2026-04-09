@@ -84,6 +84,19 @@ impl SqliteStorage {
         Ok(clusters)
     }
 
+    /// Fill in dominant_tags for clusters that were computed without DB access.
+    pub(crate) fn enrich_clusters_with_tags_sync(
+        &self,
+        mut clusters: Vec<AtomCluster>,
+    ) -> StorageResult<Vec<AtomCluster>> {
+        let conn = self.db.read_conn()?;
+        for cluster in &mut clusters {
+            cluster.dominant_tags = get_dominant_tags_for_cluster(&conn, &cluster.atom_ids)
+                .unwrap_or_default();
+        }
+        Ok(clusters)
+    }
+
     pub(crate) fn get_canvas_level_sync(
         &self,
         parent_id: Option<&str>,

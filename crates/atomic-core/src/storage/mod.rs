@@ -236,6 +236,8 @@ dispatch! {
         => sqlite: get_all_atom_tag_ids_sync, pg_trait: AtomStore, pg_method: get_all_atom_tag_ids;
     fn get_canvas_atom_metadata_sync(&self) -> Result<Vec<CanvasAtomPosition>, AtomicCoreError>
         => sqlite: get_canvas_atom_metadata_sync, pg_trait: AtomStore, pg_method: get_canvas_atom_metadata;
+    fn get_canvas_atom_metadata_light_sync(&self) -> Result<Vec<(String, String, Option<String>, i32)>, AtomicCoreError>
+        => sqlite: get_canvas_atom_metadata_light_sync, pg_trait: AtomStore, pg_method: get_canvas_atom_metadata_light;
 
     // ---- TagStore ----
     fn get_all_tags_impl(&self) -> Result<Vec<TagWithCount>, AtomicCoreError>
@@ -290,6 +292,8 @@ dispatch! {
         => sqlite: rebuild_semantic_edges_sync, pg_trait: ChunkStore, pg_method: rebuild_semantic_edges;
     fn get_semantic_edges_sync(&self, min_similarity: f32) -> Result<Vec<SemanticEdge>, AtomicCoreError>
         => sqlite: get_semantic_edges_sync, pg_trait: ChunkStore, pg_method: get_semantic_edges;
+    fn get_semantic_edges_raw_sync(&self, min_similarity: f32) -> Result<Vec<(String, String, f32)>, AtomicCoreError>
+        => sqlite: get_semantic_edges_raw_sync, pg_trait: ChunkStore, pg_method: get_semantic_edges_raw;
     fn get_atom_neighborhood_sync(&self, atom_id: &str, depth: i32, min_similarity: f32) -> Result<NeighborhoodGraph, AtomicCoreError>
         => sqlite: get_atom_neighborhood_sync, pg_trait: ChunkStore, pg_method: get_atom_neighborhood;
     fn get_connection_counts_sync(&self, min_similarity: f32) -> Result<HashMap<String, i32>, AtomicCoreError>
@@ -428,6 +432,8 @@ dispatch! {
         => sqlite: get_clusters_sync, pg_trait: ClusterStore, pg_method: get_clusters;
     fn get_canvas_level_sync(&self, parent_id: Option<&str>, children_hint: Option<Vec<String>>) -> Result<CanvasLevel, AtomicCoreError>
         => sqlite: get_canvas_level_sync, pg_trait: ClusterStore, pg_method: get_canvas_level;
+    fn enrich_clusters_with_tags_sync(&self, clusters: Vec<AtomCluster>) -> Result<Vec<AtomCluster>, AtomicCoreError>
+        => sqlite: enrich_clusters_with_tags_sync, pg_trait: ClusterStore, pg_method: enrich_clusters_with_tags;
 
     // ---- DatabaseStore ----
     fn list_databases_sync(&self) -> Result<Vec<crate::registry::DatabaseInfo>, AtomicCoreError>

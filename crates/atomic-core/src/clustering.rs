@@ -101,6 +101,26 @@ pub fn group_labels_into_clusters(
     groups
 }
 
+/// Compute clusters from pre-loaded edge triples (no DB access).
+/// Returns clusters without dominant_tags (caller must enrich separately).
+pub fn compute_clusters_from_edges(
+    edges: &[(String, String, f32)],
+    min_cluster_size: i32,
+) -> Vec<AtomCluster> {
+    if edges.is_empty() {
+        return vec![];
+    }
+    let labels = label_propagation(edges);
+    let groups = group_labels_into_clusters(&labels, min_cluster_size as usize);
+    groups.into_iter().enumerate().map(|(i, atom_ids)| {
+        AtomCluster {
+            cluster_id: i as i32,
+            atom_ids,
+            dominant_tags: vec![],
+        }
+    }).collect()
+}
+
 /// Compute clusters using a simplified label propagation algorithm.
 /// This groups atoms that are highly connected via semantic edges.
 pub fn compute_atom_clusters(

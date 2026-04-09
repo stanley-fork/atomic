@@ -129,6 +129,9 @@ pub trait AtomStore: Send + Sync {
 
     /// Get atom metadata for canvas display (title, primary tag, tag count) by position.
     async fn get_canvas_atom_metadata(&self) -> StorageResult<Vec<CanvasAtomPosition>>;
+
+    /// Lightweight canvas metadata: (atom_id, title, primary_tag_name, tag_count).
+    async fn get_canvas_atom_metadata_light(&self) -> StorageResult<Vec<(String, String, Option<String>, i32)>>;
 }
 
 // ==================== Tag Storage ====================
@@ -304,6 +307,18 @@ pub trait ChunkStore: Send + Sync {
         &self,
         min_similarity: f32,
     ) -> StorageResult<Vec<SemanticEdge>>;
+
+    /// Lightweight edge triples (source, target, score) sorted by score DESC.
+    async fn get_semantic_edges_raw(
+        &self,
+        min_similarity: f32,
+    ) -> StorageResult<Vec<(String, String, f32)>> {
+        // Default: extract from full edges
+        let edges = self.get_semantic_edges(min_similarity).await?;
+        Ok(edges.into_iter()
+            .map(|e| (e.source_atom_id, e.target_atom_id, e.similarity_score))
+            .collect())
+    }
 
     /// Get the local neighborhood graph around an atom.
     async fn get_atom_neighborhood(
@@ -739,6 +754,14 @@ pub trait ClusterStore: Send + Sync {
         parent_id: Option<&str>,
         children_hint: Option<Vec<String>>,
     ) -> StorageResult<CanvasLevel>;
+
+    /// Enrich clusters (computed without DB) with dominant tag names.
+    async fn enrich_clusters_with_tags(
+        &self,
+        clusters: Vec<AtomCluster>,
+    ) -> StorageResult<Vec<AtomCluster>> {
+        Ok(clusters)
+    }
 }
 
 // ==================== Settings Storage ====================

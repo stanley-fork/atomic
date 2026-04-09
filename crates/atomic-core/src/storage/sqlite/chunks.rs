@@ -288,6 +288,26 @@ impl SqliteStorage {
         Ok(count)
     }
 
+    /// Raw edge triples (source, target, score) sorted by score DESC.
+    /// Lightweight — no full SemanticEdge struct, no chunk indexes, no timestamps.
+    pub(crate) fn get_semantic_edges_raw_sync(
+        &self,
+        min_similarity: f32,
+    ) -> StorageResult<Vec<(String, String, f32)>> {
+        let conn = self.db.read_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT source_atom_id, target_atom_id, similarity_score
+             FROM semantic_edges
+             WHERE similarity_score >= ?1
+             ORDER BY similarity_score DESC"
+        )?;
+        let edges = stmt.query_map([min_similarity], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        Ok(edges)
+    }
+
     pub(crate) fn get_semantic_edges_sync(
         &self,
         min_similarity: f32,
@@ -782,6 +802,13 @@ impl ChunkStore for SqliteStorage {
         min_similarity: f32,
     ) -> StorageResult<Vec<SemanticEdge>> {
         self.get_semantic_edges_sync(min_similarity)
+    }
+
+    async fn get_semantic_edges_raw(
+        &self,
+        min_similarity: f32,
+    ) -> StorageResult<Vec<(String, String, f32)>> {
+        self.get_semantic_edges_raw_sync(min_similarity)
     }
 
     async fn get_atom_neighborhood(

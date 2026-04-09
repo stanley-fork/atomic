@@ -1472,7 +1472,7 @@ impl AtomicCore {
     /// Pure read operation — does not persist positions to the database.
     /// Works with both SQLite and Postgres backends via storage dispatch.
     pub fn compute_and_get_canvas_data(&self) -> Result<GlobalCanvasData, AtomicCoreError> {
-        // Load all average embeddings via storage abstraction
+        // Load all average embeddings via storage abstraction (single scan of atom_chunks)
         let embeddings = self.storage.get_all_embedding_pairs_sync()?;
         if embeddings.is_empty() {
             return Ok(GlobalCanvasData { atoms: vec![], edges: vec![], clusters: vec![] });
@@ -1486,36 +1486,72 @@ impl AtomicCore {
             .map(|(id, x, y)| (id.clone(), (*x, *y)))
             .collect();
 
-        // Load atom metadata and merge with projected positions
-        let atoms_with_embeddings = self.storage.get_atoms_with_embeddings_impl()?;
+        // Load lightweight canvas metadata (id, title, first tag, tag count, tag_ids)
+        // — no full content, no embedding blobs, single query with LEFT JOIN
+        let atom_metadata = self.storage.get_canvas_atom_metadata_light_sync()?;
         let mut atom_tag_map = self.storage.get_all_atom_tag_ids_sync()?;
 
-        let atoms: Vec<CanvasAtomPosition> = atoms_with_embeddings.iter()
-            .filter_map(|awe| {
-                let (x, y) = position_map.get(&awe.atom.atom.id)?;
-                let (title, _) = extract_title_and_snippet(&awe.atom.atom.content, 60);
-                let primary_tag = awe.atom.tags.first().map(|t| t.name.clone());
-                let tag_ids = atom_tag_map.remove(&awe.atom.atom.id).unwrap_or_default();
+        let atoms: Vec<CanvasAtomPosition> = atom_metadata.into_iter()
+            .filter_map(|(atom_id, title, primary_tag, tag_count)| {
+                let (x, y) = position_map.get(&atom_id)?;
+                let tag_ids = atom_tag_map.remove(&atom_id).unwrap_or_default();
                 Some(CanvasAtomPosition {
-                    atom_id: awe.atom.atom.id.clone(),
+                    atom_id,
                     x: *x,
                     y: *y,
                     title,
                     primary_tag,
-                    tag_count: awe.atom.tags.len() as i32,
+                    tag_count,
                     tag_ids,
                 })
             })
             .collect();
 
-        // Load top-2 semantic edges per atom
-        let edges = self.storage.get_top_k_canvas_edges_sync(2)?;
+        // Load semantic edges once, use for both canvas edges and clustering
+        let all_edges = self.storage.get_semantic_edges_raw_sync(0.5)?;
 
-        // Compute cluster centroids
-        let cluster_data = self.storage.compute_clusters_sync(0.5, 3)?;
+        // Build top-k canvas edges from the loaded data
+        let edges = Self::filter_top_k_edges(&all_edges, 2);
+
+        // Compute clusters from the same edge data (no second DB scan)
+        let cluster_data = clustering::compute_clusters_from_edges(&all_edges, 3);
+        // Enrich clusters with dominant tag names
+        let cluster_data = self.storage.enrich_clusters_with_tags_sync(cluster_data)?;
         let clusters = Self::build_cluster_centroids(&cluster_data, &position_map);
 
         Ok(GlobalCanvasData { atoms, edges, clusters })
+    }
+
+    /// Filter edges to keep at most top_k per atom, input must be sorted by score DESC.
+    fn filter_top_k_edges(
+        all_edges: &[(String, String, f32)],
+        top_k: usize,
+    ) -> Vec<CanvasEdgeData> {
+        let mut per_atom: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut kept: Vec<(&str, &str, f32)> = Vec::new();
+
+        for (src, tgt, score) in all_edges {
+            let src_count = per_atom.get(src.as_str()).copied().unwrap_or(0);
+            let tgt_count = per_atom.get(tgt.as_str()).copied().unwrap_or(0);
+            if src_count >= top_k && tgt_count >= top_k {
+                continue;
+            }
+            *per_atom.entry(src.as_str()).or_insert(0) += 1;
+            *per_atom.entry(tgt.as_str()).or_insert(0) += 1;
+            kept.push((src.as_str(), tgt.as_str(), *score));
+        }
+
+        let min_w = kept.iter().map(|(_, _, w)| *w).fold(f32::MAX, f32::min);
+        let max_w = kept.iter().map(|(_, _, w)| *w).fold(f32::MIN, f32::max);
+        let range = (max_w - min_w).max(0.001);
+
+        kept.into_iter().map(|(src, tgt, score)| {
+            CanvasEdgeData {
+                source: src.to_string(),
+                target: tgt.to_string(),
+                weight: (score - min_w) / range,
+            }
+        }).collect()
     }
 
     /// Build cluster centroid labels from cluster data and position map (pure math).
