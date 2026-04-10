@@ -363,16 +363,29 @@ async fn process_embedding_only_inner(
         return Ok(());
     }
 
-    // Generate all embeddings in one batch (async, no lock)
-    let chunk_texts: Vec<String> = chunks.iter().map(|s| s.to_string()).collect();
-    let embeddings = generate_embeddings_with_config(&provider_config, &chunk_texts)
-        .await
-        .map_err(|e| format!("Failed to generate embeddings: {}", e.message))?;
+    // Use adaptive batching so provider batch-size limits (e.g. DashScope's
+    // max 10) are handled by splitting, same as the bulk embedding path.
+    let pending: Vec<PendingChunk> = chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| PendingChunk {
+            atom_id: atom_id.to_string(),
+            chunk_index: index,
+            content: chunk,
+        })
+        .collect();
+
+    let (embedded, failed) = embed_chunks_batched(&provider_config, pending).await;
+
+    if !failed.is_empty() {
+        let error = failed.into_iter().next().map(|(_, e)| e).unwrap_or_default();
+        return Err(format!("Failed to generate embeddings: {}", error));
+    }
 
     // Store chunks and embeddings
-    let chunks_with_embeddings: Vec<(String, Vec<f32>)> = chunks
+    let chunks_with_embeddings: Vec<(String, Vec<f32>)> = embedded
         .into_iter()
-        .zip(embeddings.into_iter())
+        .map(|(chunk, emb)| (chunk.content, emb))
         .collect();
     storage.save_chunks_and_embeddings_sync(atom_id, &chunks_with_embeddings)
         .map_err(|e| format!("Failed to store chunks: {}", e))?;
