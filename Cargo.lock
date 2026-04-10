@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "atomic"
-version = "1.18.1"
+version = "1.19.0"
 dependencies = [
  "atomic-core",
  "reqwest 0.12.26",
