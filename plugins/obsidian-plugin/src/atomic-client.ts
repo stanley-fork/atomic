@@ -24,8 +24,7 @@ export interface Tag {
   created_at: string;
 }
 
-export interface AtomWithTags {
-  atom: Atom;
+export interface AtomWithTags extends Atom {
   tags: Tag[];
 }
 
@@ -95,10 +94,14 @@ export class AtomicClient {
   }
 
   private get headers(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${this.settings.authToken}`,
       "Content-Type": "application/json",
     };
+    if (this.settings.databaseName) {
+      headers["X-Atomic-Database"] = this.settings.databaseName;
+    }
+    return headers;
   }
 
   private async request<T>(params: RequestUrlParam): Promise<T> {

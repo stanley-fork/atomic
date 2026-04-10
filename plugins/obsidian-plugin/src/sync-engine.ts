@@ -3,6 +3,18 @@ import { AtomicClient } from "./atomic-client";
 import type { AtomicSettings } from "./settings";
 import { SyncState, hashContent, type SyncStateData } from "./sync-state";
 
+export interface SyncProgress {
+  phase: 'reading' | 'syncing' | 'complete';
+  totalFiles: number;
+  processed: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: number;
+}
+
+export type SyncProgressCallback = (progress: SyncProgress) => void;
+
 export class SyncEngine {
   private app: App;
   private client: AtomicClient;
@@ -62,7 +74,16 @@ export class SyncEngine {
   // --- File event handlers ---
 
   private onFileChange(file: TAbstractFile): void {
-    if (!this.isMarkdownFile(file) || this.shouldExclude(file.path)) return;
+    if (!this.isMarkdownFile(file)) {
+      console.debug(`Atomic: ignoring non-markdown file: ${file.path}`);
+      return;
+    }
+    if (this.shouldExclude(file.path)) {
+      console.debug(`Atomic: excluded by pattern: ${file.path}`);
+      return;
+    }
+
+    console.debug(`Atomic: file changed, scheduling sync: ${file.path}`);
 
     const existing = this.pendingSync.get(file.path);
     if (existing) clearTimeout(existing);
@@ -70,6 +91,7 @@ export class SyncEngine {
     this.pendingSync.set(
       file.path,
       setTimeout(() => {
+        console.debug(`Atomic: debounce fired, syncing: ${file.path}`);
         this.syncFile(file).catch((e) =>
           console.error(`Atomic: Failed to sync ${file.path}:`, e)
         );
@@ -124,7 +146,8 @@ export class SyncEngine {
     // Update the atom's source_url to reflect new path
     const newSourceUrl = this.generateSourceUrl(file.path);
     try {
-      const content = await this.app.vault.read(file);
+      const raw = await this.app.vault.read(file);
+      const content = this.stripFrontmatter(file, raw);
       await this.client.updateAtom(info.atomId, {
         content,
         source_url: newSourceUrl,
@@ -135,15 +158,30 @@ export class SyncEngine {
     }
   }
 
+  /** Strip YAML frontmatter using Obsidian's parsed metadata cache */
+  private stripFrontmatter(file: TFile, content: string): string {
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (cache?.frontmatterPosition) {
+      const end = cache.frontmatterPosition.end.offset;
+      return content.slice(end).trimStart();
+    }
+    return content;
+  }
+
   // --- Core sync logic ---
 
   async syncFile(file: TFile): Promise<void> {
-    const content = await this.app.vault.read(file);
+    const raw = await this.app.vault.read(file);
+    const content = this.stripFrontmatter(file, raw);
     const hash = await hashContent(content);
 
     // Skip if unchanged
     const existing = this.syncState.getFile(file.path);
-    if (existing && existing.contentHash === hash) return;
+    if (existing && existing.contentHash === hash) {
+      console.debug(`Atomic: skipping unchanged file: ${file.path}`);
+      return;
+    }
+    console.debug(`Atomic: syncing ${file.path} (existing atom: ${existing?.atomId ?? "none"})`);
 
     const sourceUrl = this.generateSourceUrl(file.path);
 
@@ -160,9 +198,9 @@ export class SyncEngine {
         // Check server for existing atom (e.g., imported via batch before plugin was installed)
         const serverAtom = await this.client.getAtomBySourceUrl(sourceUrl);
         if (serverAtom) {
-          await this.client.updateAtom(serverAtom.atom.id, { content, source_url: sourceUrl });
+          await this.client.updateAtom(serverAtom.id, { content, source_url: sourceUrl });
           this.syncState.setFile(file.path, {
-            atomId: serverAtom.atom.id,
+            atomId: serverAtom.id,
             contentHash: hash,
             lastSynced: Date.now(),
           });
@@ -170,7 +208,7 @@ export class SyncEngine {
           // Create new atom
           const created = await this.client.createAtom({ content, source_url: sourceUrl });
           this.syncState.setFile(file.path, {
-            atomId: created.atom.id,
+            atomId: created.id,
             contentHash: hash,
             lastSynced: Date.now(),
           });
@@ -201,34 +239,149 @@ export class SyncEngine {
     }
   }
 
-  async syncAll(): Promise<void> {
+  async syncAll(onProgress?: SyncProgressCallback): Promise<SyncProgress> {
     const files = this.app.vault.getMarkdownFiles().filter((f) => !this.shouldExclude(f.path));
-    let synced = 0;
-    let skipped = 0;
-    let errors = 0;
+    const progress: SyncProgress = {
+      phase: 'reading',
+      totalFiles: files.length,
+      processed: 0,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      errors: 0,
+    };
 
-    new Notice(`Syncing ${files.length} files to Atomic...`);
+    if (!onProgress) {
+      new Notice(`Syncing ${files.length} files to Atomic...`);
+    }
+    onProgress?.(progress);
+
+    // Separate files into new (bulk-create) vs existing (individual update)
+    const newFiles: { file: TFile; content: string; hash: string; sourceUrl: string }[] = [];
+    const updatedFiles: { file: TFile; content: string; hash: string; sourceUrl: string; atomId: string }[] = [];
 
     for (const file of files) {
       try {
-        const content = await this.app.vault.read(file);
+        const raw = await this.app.vault.read(file);
+        const content = this.stripFrontmatter(file, raw);
         const hash = await hashContent(content);
         const existing = this.syncState.getFile(file.path);
 
         if (existing && existing.contentHash === hash) {
-          skipped++;
+          progress.skipped++;
+          progress.processed++;
           continue;
         }
 
-        await this.syncFile(file);
-        synced++;
+        const sourceUrl = this.generateSourceUrl(file.path);
+        if (existing) {
+          updatedFiles.push({ file, content, hash, sourceUrl, atomId: existing.atomId });
+        } else {
+          newFiles.push({ file, content, hash, sourceUrl });
+        }
       } catch (e) {
-        errors++;
-        console.error(`Atomic: Failed to sync ${file.path}:`, e);
+        progress.errors++;
+        progress.processed++;
+        console.error(`Atomic: Failed to read ${file.path}:`, e);
       }
     }
 
-    new Notice(`Sync complete: ${synced} synced, ${skipped} unchanged, ${errors} errors`);
+    progress.phase = 'syncing';
+    onProgress?.(progress);
+
+    // Bulk-create new files in batches (cap at ~1.5MB per batch to stay under actix-web's 2MB default)
+    const MAX_BATCH_BYTES = 1_500_000;
+    const batches: typeof newFiles[] = [];
+    let currentBatch: typeof newFiles = [];
+    let currentBytes = 0;
+    for (const entry of newFiles) {
+      const entryBytes = new TextEncoder().encode(entry.content).length;
+      if (currentBatch.length > 0 && currentBytes + entryBytes > MAX_BATCH_BYTES) {
+        batches.push(currentBatch);
+        currentBatch = [];
+        currentBytes = 0;
+      }
+      currentBatch.push(entry);
+      currentBytes += entryBytes;
+    }
+    if (currentBatch.length > 0) batches.push(currentBatch);
+
+    for (const batch of batches) {
+      try {
+        const result = await this.client.bulkCreateAtoms(
+          batch.map((f) => ({ content: f.content, source_url: f.sourceUrl }))
+        );
+
+        // Match returned atoms back to files via source_url
+        const atomByUrl = new Map<string, string>();
+        for (const atom of result.atoms) {
+          if (atom.source_url) {
+            atomByUrl.set(atom.source_url, atom.id);
+          }
+        }
+
+        for (const entry of batch) {
+          const atomId = atomByUrl.get(entry.sourceUrl);
+          if (atomId) {
+            this.syncState.setFile(entry.file.path, {
+              atomId,
+              contentHash: entry.hash,
+              lastSynced: Date.now(),
+            });
+            progress.created++;
+          } else {
+            progress.errors++;
+            console.error(`Atomic: No atom returned for ${entry.file.path}`);
+          }
+          progress.processed++;
+        }
+
+        await this.persistState();
+        onProgress?.(progress);
+      } catch (e) {
+        progress.errors += batch.length;
+        progress.processed += batch.length;
+        console.error(`Atomic: Bulk create failed (${batch.length} files):`, e);
+        onProgress?.(progress);
+      }
+    }
+
+    // Update existing files individually
+    for (const entry of updatedFiles) {
+      try {
+        await this.client.updateAtom(entry.atomId, {
+          content: entry.content,
+          source_url: entry.sourceUrl,
+        });
+        this.syncState.setFile(entry.file.path, {
+          atomId: entry.atomId,
+          contentHash: entry.hash,
+          lastSynced: Date.now(),
+        });
+        progress.updated++;
+      } catch (e) {
+        progress.errors++;
+        console.error(`Atomic: Failed to update ${entry.file.path}:`, e);
+      }
+      progress.processed++;
+      onProgress?.(progress);
+    }
+
+    await this.persistState();
+    progress.phase = 'complete';
+    onProgress?.(progress);
+
+    if (!onProgress) {
+      new Notice(`Sync complete: ${progress.created} created, ${progress.updated} updated, ${progress.skipped} unchanged, ${progress.errors} errors`);
+    }
+
+    return progress;
+  }
+
+  async resetAndResync(onProgress?: SyncProgressCallback): Promise<SyncProgress> {
+    this.syncState.clear();
+    await this.persistState();
+    return this.syncAll(onProgress);
   }
 
   // --- Watch management ---
@@ -236,6 +389,7 @@ export class SyncEngine {
   startWatching(): void {
     if (this.watching) return;
     this.watching = true;
+    console.log("Atomic: auto-sync started, watching vault events");
 
     this.eventRefs.push(
       this.app.vault.on("modify", (file) => this.onFileChange(file)),

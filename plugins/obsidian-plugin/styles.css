@@ -82,6 +82,262 @@
   padding: 32px 16px;
 }
 
+/* Onboarding wizard */
+.atomic-onboarding-modal .modal-content {
+  padding: 0;
+}
+
+.atomic-onboarding {
+  padding: 24px;
+}
+
+.atomic-onboarding h2 {
+  margin: 0 0 8px;
+  font-size: 1.3em;
+}
+
+.atomic-onboarding-desc {
+  color: var(--text-muted);
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.atomic-onboarding-features {
+  color: var(--text-muted);
+  padding-left: 20px;
+  margin: 0 0 20px;
+  line-height: 1.7;
+}
+
+.atomic-onboarding-features strong {
+  color: var(--text-normal);
+}
+
+.atomic-onboarding-body {
+  min-height: 260px;
+}
+
+.atomic-onboarding-form .setting-item {
+  border-top: none;
+  padding: 6px 0;
+}
+
+.atomic-onboarding-test {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+
+.atomic-onboarding-test-status {
+  font-size: 0.85em;
+}
+
+.atomic-onboarding-test-status.success {
+  color: var(--color-green);
+}
+
+.atomic-onboarding-test-status.error {
+  color: var(--color-red);
+}
+
+.atomic-onboarding-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+/* Step indicator */
+.atomic-step-indicator {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  margin-bottom: 24px;
+}
+
+.atomic-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 1;
+}
+
+.atomic-step-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--background-modifier-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.atomic-step-dot svg {
+  width: 12px;
+  height: 12px;
+  color: var(--text-on-accent);
+}
+
+.atomic-step-dot.active {
+  background: var(--interactive-accent);
+  box-shadow: 0 0 0 3px var(--interactive-accent-hover);
+}
+
+.atomic-step-dot.completed {
+  background: var(--interactive-accent);
+}
+
+.atomic-step-label {
+  font-size: 0.7em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.atomic-step-connector {
+  height: 2px;
+  flex: 1;
+  min-width: 32px;
+  max-width: 64px;
+  background: var(--background-modifier-border);
+  margin-top: 11px;
+  transition: background 0.2s ease;
+}
+
+.atomic-step-connector.completed {
+  background: var(--interactive-accent);
+}
+
+/* Progress bar */
+.atomic-sync-progress {
+  margin: 16px 0;
+}
+
+.atomic-sync-progress.hidden {
+  display: none;
+}
+
+.atomic-progress-bar {
+  height: 6px;
+  background: var(--background-modifier-border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.atomic-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--interactive-accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.atomic-progress-label {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+/* Sync stats */
+.atomic-sync-stats {
+  display: flex;
+  gap: 20px;
+}
+
+.atomic-sync-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.atomic-sync-stat-value {
+  font-size: 1.2em;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.atomic-sync-stat-label {
+  font-size: 0.75em;
+  color: var(--text-muted);
+}
+
+/* Feature cards */
+.atomic-feature-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.atomic-feature-card {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.atomic-feature-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  color: var(--interactive-accent);
+  margin-top: 2px;
+}
+
+.atomic-feature-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.atomic-feature-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.atomic-feature-title {
+  font-weight: 600;
+  font-size: 0.9em;
+}
+
+.atomic-feature-desc {
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+.atomic-feature-shortcut {
+  font-size: 0.75em;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+/* Skip link */
+.atomic-skip-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85em;
+  padding: 4px 8px;
+  margin-right: auto;
+}
+
+.atomic-skip-link:hover {
+  color: var(--text-normal);
+}
+
+.atomic-skip-link.hidden {
+  display: none;
+}
+
 /* Status bar */
 .atomic-status {
   display: flex;
