@@ -35,6 +35,10 @@ export class SyncState {
     }
   }
 
+  clear(): void {
+    this.data.files = {};
+  }
+
   getAllPaths(): string[] {
     return Object.keys(this.data.files);
   }

@@ -501,3 +501,65 @@ pub async fn delete_tag(
     let core = db.0;
     blocking_ok(move || core.delete_tag(&id, recursive)).await
 }
+
+#[derive(Deserialize, Serialize, ToSchema)]
+pub struct SetAutotagTargetRequest {
+    /// Whether the tag should be a candidate for AI auto-tagging.
+    pub value: bool,
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/tags/{id}/autotag-target",
+    params(
+        ("id" = String, Path, description = "Tag ID"),
+    ),
+    request_body = SetAutotagTargetRequest,
+    responses(
+        (status = 204, description = "Flag updated"),
+        (status = 404, description = "Tag not found", body = ApiErrorResponse),
+    ),
+    tag = "tags",
+)]
+pub async fn set_tag_autotag_target(
+    db: Db,
+    path: web::Path<String>,
+    body: web::Json<SetAutotagTargetRequest>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    let value = body.into_inner().value;
+    let core = db.0;
+    match web::block(move || core.set_tag_autotag_target(&id, value)).await {
+        Ok(Ok(())) => HttpResponse::NoContent().finish(),
+        Ok(Err(e)) => crate::error::error_response(e),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": e.to_string()})),
+    }
+}
+
+#[derive(Deserialize, Serialize, ToSchema)]
+pub struct ConfigureAutotagTargetsRequest {
+    /// Names of seeded default categories to keep flagged.
+    /// Any seeded default not in this list is unflagged.
+    pub keep_defaults: Vec<String>,
+    /// Names of new top-level tags to create with the flag set.
+    /// Existing top-level tags with matching names are flagged in place.
+    pub add_custom: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/tags/configure-autotag-targets",
+    request_body = ConfigureAutotagTargetsRequest,
+    responses(
+        (status = 200, description = "Newly created/flagged custom tags", body = Vec<Tag>),
+    ),
+    tag = "tags",
+)]
+pub async fn configure_autotag_targets(
+    db: Db,
+    body: web::Json<ConfigureAutotagTargetsRequest>,
+) -> HttpResponse {
+    let req = body.into_inner();
+    let core = db.0;
+    blocking_ok(move || core.configure_autotag_targets(&req.keep_defaults, &req.add_custom)).await
+}

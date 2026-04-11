@@ -1,18 +1,20 @@
 import { ItemView, WorkspaceLeaf, MarkdownRenderer } from "obsidian";
-import { AtomicClient, type TagWithCount, type WikiArticle } from "./atomic-client";
+import { AtomicClient, type TagWithCount, type WikiArticleWithCitations, type WikiCitation } from "./atomic-client";
 
 export const WIKI_VIEW_TYPE = "atomic-wiki";
 
 export class WikiView extends ItemView {
   private client: AtomicClient;
+  private getVaultName: () => string;
   private tags: TagWithCount[] = [];
   private selectedTagId: string | null = null;
-  private article: WikiArticle | null = null;
+  private article: WikiArticleWithCitations | null = null;
   private loading = false;
 
-  constructor(leaf: WorkspaceLeaf, client: AtomicClient) {
+  constructor(leaf: WorkspaceLeaf, client: AtomicClient, getVaultName: () => string) {
     super(leaf);
     this.client = client;
+    this.getVaultName = getVaultName;
   }
 
   getViewType(): string {
@@ -128,10 +130,15 @@ export class WikiView extends ItemView {
       const genBtn = actions.createEl("button", { text: "Generate Article" });
       genBtn.addEventListener("click", async () => {
         if (!this.selectedTagId) return;
+        const tagName = this.findTagName(this.selectedTagId);
+        if (!tagName) {
+          genBtn.setText("Tag not found");
+          return;
+        }
         genBtn.disabled = true;
         genBtn.setText("Generating...");
         try {
-          this.article = await this.client.generateWikiArticle(this.selectedTagId);
+          this.article = await this.client.generateWikiArticle(this.selectedTagId, tagName);
           this.renderContent(wrapper);
         } catch (e) {
           genBtn.setText("Failed - Retry");
@@ -143,12 +150,73 @@ export class WikiView extends ItemView {
     }
 
     const contentEl = wrapper.createDiv({ cls: "atomic-wiki-content" });
-    MarkdownRenderer.render(
-      this.app,
-      this.article.content,
-      contentEl,
-      "",
-      this
+    const rewritten = this.rewriteCitations(
+      this.article.article.content,
+      this.article.citations
     );
+    MarkdownRenderer.render(this.app, rewritten, contentEl, "", this);
+  }
+
+  /**
+   * Replace `[N]` citation markers in wiki content with Obsidian wikilinks
+   * for citations that point to atoms synced from this vault, and strip
+   * markers that point to non-Obsidian atoms.
+   *
+   * Caveat: this is a regex pass and does not respect markdown code fences.
+   * Wiki content from the LLM rarely contains code blocks with `[N]`-shaped
+   * strings, so the trade-off is acceptable for now.
+   */
+  private rewriteCitations(content: string, citations: WikiCitation[]): string {
+    const byIndex = new Map<number, WikiCitation>();
+    for (const c of citations) byIndex.set(c.citation_index, c);
+
+    const vaultPrefix = `obsidian://${this.getVaultName()}/`;
+
+    return content.replace(/\[(\d+)\]/g, (match, indexStr) => {
+      const index = parseInt(indexStr, 10);
+      const citation = byIndex.get(index);
+      // Unknown citation index — leave the marker untouched rather than silently dropping it.
+      if (!citation) return match;
+
+      const url = citation.source_url;
+      if (!url || !url.startsWith(vaultPrefix)) {
+        // Non-Obsidian (or different-vault) citation — leave the marker as-is
+        // so prose like "…Smith [2] and Jones [3]…" doesn't end up with a
+        // dangling gap that looks like a typo. The reader can still see the
+        // citation existed even though we can't link it.
+        return match;
+      }
+
+      // Decode obsidian://VaultName/encoded/path.md → vault-relative path,
+      // then drop the .md extension for the wikilink target. Obsidian resolves
+      // both `[[Note]]` and `[[folder/Note]]`; using the path is unambiguous
+      // when basenames collide.
+      const encodedPath = url.slice(vaultPrefix.length);
+      let path: string;
+      try {
+        path = encodedPath
+          .split("/")
+          .map((seg) => decodeURIComponent(seg))
+          .join("/");
+      } catch {
+        return ""; // malformed encoding — strip rather than render garbage
+      }
+      const target = path.replace(/\.md$/i, "");
+      return `[[${target}]]`;
+    });
+  }
+
+  private findTagName(tagId: string): string | null {
+    const search = (nodes: TagWithCount[]): string | null => {
+      for (const node of nodes) {
+        if (node.id === tagId) return node.name;
+        if (node.children.length > 0) {
+          const found = search(node.children);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    return search(this.tags);
   }
 }

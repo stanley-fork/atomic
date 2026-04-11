@@ -199,7 +199,7 @@ impl Database {
     ///   1. Add a new `if version < N` block at the end (before the virtual-table section)
     ///   2. End the block with `PRAGMA user_version = N;`
     ///   3. Bump LATEST_VERSION
-    const LATEST_VERSION: i32 = 10;
+    const LATEST_VERSION: i32 = 11;
 
     pub fn run_migrations(conn: &Connection) -> Result<(), AtomicCoreError> {
         let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -618,6 +618,31 @@ impl Database {
                 [],
             )?;
             conn.execute_batch("PRAGMA user_version = 10;")?;
+        }
+
+        // --- V10 → V11: Mark which top-level tags the auto-tagger may extend ---
+        if version < 11 {
+            let has_col: bool = conn
+                .query_row(
+                    "SELECT 1 FROM pragma_table_info('tags') WHERE name='is_autotag_target'",
+                    [],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+
+            if !has_col {
+                conn.execute_batch(
+                    "ALTER TABLE tags ADD COLUMN is_autotag_target INTEGER NOT NULL DEFAULT 0;",
+                )?;
+            }
+
+            // Backfill: the five seeded categories are auto-tag targets by default.
+            conn.execute_batch(
+                "UPDATE tags SET is_autotag_target = 1
+                   WHERE parent_id IS NULL
+                     AND name IN ('Topics', 'People', 'Locations', 'Organizations', 'Events');
+                 PRAGMA user_version = 11;",
+            )?;
         }
 
         // --- Triggers (recreated every startup to stay current) ---

@@ -125,6 +125,21 @@ export const COMMAND_MAP: Record<string, CommandSpec> = {
     method: 'DELETE',
     path: (a) => `/api/tags/${encodeURIComponent(a.id as string)}${a.recursive ? '?recursive=true' : ''}`,
   },
+  set_tag_autotag_target: {
+    method: 'PUT',
+    path: (a) => `/api/tags/${encodeURIComponent(a.id as string)}/autotag-target`,
+    argsMode: 'body',
+    transformArgs: (a) => ({ value: a.value }),
+  },
+  configure_autotag_targets: {
+    method: 'POST',
+    path: '/api/tags/configure-autotag-targets',
+    argsMode: 'body',
+    transformArgs: (a) => ({
+      keep_defaults: a.keepDefaults ?? [],
+      add_custom: a.addCustom ?? [],
+    }),
+  },
 
   // ==================== Search ====================
   search_atoms_semantic: {

@@ -488,8 +488,8 @@ async fn pg_batch_fetch_tags(
         return Ok(HashMap::new());
     }
 
-    let rows: Vec<(String, String, String, Option<String>, String)> = sqlx::query_as(
-        "SELECT at.atom_id, t.id, t.name, t.parent_id, t.created_at
+    let rows: Vec<(String, String, String, Option<String>, String, bool)> = sqlx::query_as(
+        "SELECT at.atom_id, t.id, t.name, t.parent_id, t.created_at, t.is_autotag_target
          FROM atom_tags at
          INNER JOIN tags t ON at.tag_id = t.id
          WHERE at.atom_id = ANY($1) AND at.db_id = $2",
@@ -501,12 +501,13 @@ async fn pg_batch_fetch_tags(
     .map_err(|e| AtomicCoreError::Search(format!("Failed to batch fetch tags: {}", e)))?;
 
     let mut map: HashMap<String, Vec<Tag>> = HashMap::new();
-    for (atom_id, tag_id, name, parent_id, created_at) in rows {
+    for (atom_id, tag_id, name, parent_id, created_at, is_autotag_target) in rows {
         map.entry(atom_id).or_default().push(Tag {
             id: tag_id,
             name,
             parent_id,
             created_at,
+            is_autotag_target,
         });
     }
     Ok(map)

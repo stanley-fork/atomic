@@ -487,8 +487,8 @@ impl ChunkStore for PostgresStorage {
             .collect();
 
         // Batch fetch tags
-        let tag_rows: Vec<(String, String, String, Option<String>, String)> = sqlx::query_as(
-            "SELECT at.atom_id, t.id, t.name, t.parent_id, t.created_at
+        let tag_rows: Vec<(String, String, String, Option<String>, String, bool)> = sqlx::query_as(
+            "SELECT at.atom_id, t.id, t.name, t.parent_id, t.created_at, t.is_autotag_target
              FROM atom_tags at
              INNER JOIN tags t ON at.tag_id = t.id
              WHERE at.atom_id = ANY($1) AND at.db_id = $2",
@@ -505,12 +505,13 @@ impl ChunkStore for PostgresStorage {
         })?;
 
         let mut tag_map: HashMap<String, Vec<Tag>> = HashMap::new();
-        for (atom_id_val, tag_id, name, parent_id, created_at) in tag_rows {
+        for (atom_id_val, tag_id, name, parent_id, created_at, is_autotag_target) in tag_rows {
             tag_map.entry(atom_id_val).or_default().push(Tag {
                 id: tag_id,
                 name,
                 parent_id,
                 created_at,
+                is_autotag_target,
             });
         }
 

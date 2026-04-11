@@ -268,7 +268,7 @@ fn batch_fetch_tags(conn: &rusqlite::Connection, atom_ids: &[String]) -> Result<
     }
     let placeholders = atom_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let query = format!(
-        "SELECT at.atom_id, t.id, t.name, t.parent_id, t.created_at
+        "SELECT at.atom_id, t.id, t.name, t.parent_id, t.created_at, t.is_autotag_target
          FROM atom_tags at
          INNER JOIN tags t ON at.tag_id = t.id
          WHERE at.atom_id IN ({})",
@@ -285,6 +285,7 @@ fn batch_fetch_tags(conn: &rusqlite::Connection, atom_ids: &[String]) -> Result<
                     name: row.get(2)?,
                     parent_id: row.get(3)?,
                     created_at: row.get(4)?,
+                    is_autotag_target: row.get::<_, i32>(5)? != 0,
                 },
             ))
         })

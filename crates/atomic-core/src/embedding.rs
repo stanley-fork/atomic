@@ -530,9 +530,18 @@ async fn process_tagging_only_inner(
             None
         };
 
-    // Get tag tree for LLM context
+    // Get tag tree for LLM context (only top-level tags flagged as auto-tag targets)
     let tag_tree_json = storage.get_tag_tree_for_llm_impl()
         .map_err(|e| e.to_string())?;
+
+    // No auto-tag targets configured — skip tagging entirely.
+    // The user has either unflagged all defaults during onboarding or hasn't created any.
+    if tag_tree_json == "(no existing tags)" {
+        tracing::debug!(atom_id = %atom_id, "No auto-tag targets configured; skipping tagging");
+        storage.set_tagging_status_sync(atom_id, "skipped", None)
+            .map_err(|e| e.to_string())?;
+        return Ok((Vec::new(), Vec::new()));
+    }
 
     // Single LLM call on full content — no per-chunk loop, no consolidation
     let tags = extract_tags_from_content(

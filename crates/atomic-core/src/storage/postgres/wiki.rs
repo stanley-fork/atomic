@@ -34,12 +34,15 @@ impl WikiStore for PostgresStorage {
             None => return Ok(None),
         };
 
-        // Get citations
-        let citation_rows = sqlx::query_as::<_, (String, i32, String, Option<i32>, String)>(
-            "SELECT id, citation_index, atom_id, chunk_index, excerpt
-             FROM wiki_citations
-             WHERE wiki_article_id = $1 AND db_id = $2
-             ORDER BY citation_index",
+        // Get citations, joining atoms for source_url so clients can render
+        // citations differently based on the cited atom's origin (e.g. Obsidian
+        // plugin rewriting them as wikilinks).
+        let citation_rows = sqlx::query_as::<_, (String, i32, String, Option<i32>, String, Option<String>)>(
+            "SELECT c.id, c.citation_index, c.atom_id, c.chunk_index, c.excerpt, a.source_url
+             FROM wiki_citations c
+             LEFT JOIN atoms a ON a.id = c.atom_id AND a.db_id = c.db_id
+             WHERE c.wiki_article_id = $1 AND c.db_id = $2
+             ORDER BY c.citation_index",
         )
         .bind(&article.id)
         .bind(&self.db_id)
@@ -49,12 +52,13 @@ impl WikiStore for PostgresStorage {
 
         let citations: Vec<WikiCitation> = citation_rows
             .into_iter()
-            .map(|(id, citation_index, atom_id, chunk_index, excerpt)| WikiCitation {
+            .map(|(id, citation_index, atom_id, chunk_index, excerpt, source_url)| WikiCitation {
                 id,
                 citation_index,
                 atom_id,
                 chunk_index,
                 excerpt,
+                source_url,
             })
             .collect();
 

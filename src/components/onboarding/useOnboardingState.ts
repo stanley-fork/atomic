@@ -4,8 +4,17 @@ import type { AvailableModel, OllamaModel } from '../../lib/api';
 export type StepId =
   | 'welcome'
   | 'ai-provider'
+  | 'tag-categories'
   | 'integrations'
   | 'tutorial';
+
+export const DEFAULT_TAG_CATEGORIES = [
+  'Topics',
+  'People',
+  'Locations',
+  'Organizations',
+  'Events',
+] as const;
 
 export interface OnboardingState {
   currentStep: number;
@@ -48,6 +57,13 @@ export interface OnboardingState {
   openaiCompatTimeoutSecs: string;
   openaiCompatStatus: 'idle' | 'checking' | 'connected' | 'error';
   openaiCompatError: string | null;
+
+  // Step 3: Tag categories (only shown if auto-tagging is enabled)
+  selectedDefaultCategories: string[]; // subset of DEFAULT_TAG_CATEGORIES
+  customCategories: string[];
+  customCategoryInput: string;
+  isSavingCategories: boolean;
+  categoriesError: string | null;
 
   // Step 4: Mobile setup
   mobileToken: string | null;
@@ -101,6 +117,13 @@ export type OnboardingAction =
   | { type: 'SET_OPENAI_COMPAT_CONTEXT_LENGTH'; value: string }
   | { type: 'SET_OPENAI_COMPAT_TIMEOUT_SECS'; value: string }
   | { type: 'SET_OPENAI_COMPAT_STATUS'; status: 'idle' | 'checking' | 'connected' | 'error'; error?: string }
+  // Tag categories
+  | { type: 'TOGGLE_DEFAULT_CATEGORY'; name: string }
+  | { type: 'SET_CUSTOM_CATEGORY_INPUT'; value: string }
+  | { type: 'ADD_CUSTOM_CATEGORY' }
+  | { type: 'REMOVE_CUSTOM_CATEGORY'; name: string }
+  | { type: 'SET_SAVING_CATEGORIES'; value: boolean }
+  | { type: 'SET_CATEGORIES_ERROR'; error: string | null }
   // Mobile
   | { type: 'SET_MOBILE_TOKEN'; token: string | null }
   // Data loading
@@ -147,6 +170,11 @@ const initialState: OnboardingState = {
   openaiCompatTimeoutSecs: '300',
   openaiCompatStatus: 'idle',
   openaiCompatError: null,
+  selectedDefaultCategories: [...DEFAULT_TAG_CATEGORIES],
+  customCategories: [],
+  customCategoryInput: '',
+  isSavingCategories: false,
+  categoriesError: null,
   mobileToken: null,
   mobileTokenName: 'mobile-setup',
   feedUrl: '',
@@ -235,6 +263,46 @@ function reducer(state: OnboardingState, action: OnboardingAction): OnboardingSt
       return { ...state, openaiCompatTimeoutSecs: action.value };
     case 'SET_OPENAI_COMPAT_STATUS':
       return { ...state, openaiCompatStatus: action.status, openaiCompatError: action.error || null };
+    case 'TOGGLE_DEFAULT_CATEGORY': {
+      const has = state.selectedDefaultCategories.includes(action.name);
+      return {
+        ...state,
+        selectedDefaultCategories: has
+          ? state.selectedDefaultCategories.filter(n => n !== action.name)
+          : [...state.selectedDefaultCategories, action.name],
+        categoriesError: null,
+      };
+    }
+    case 'SET_CUSTOM_CATEGORY_INPUT':
+      return { ...state, customCategoryInput: action.value, categoriesError: null };
+    case 'ADD_CUSTOM_CATEGORY': {
+      const trimmed = state.customCategoryInput.trim();
+      if (!trimmed) return state;
+      if (trimmed.includes('/')) {
+        return { ...state, categoriesError: 'Category names cannot contain "/".' };
+      }
+      const existsInDefaults = DEFAULT_TAG_CATEGORIES.some(d => d.toLowerCase() === trimmed.toLowerCase());
+      const existsInCustom = state.customCategories.some(c => c.toLowerCase() === trimmed.toLowerCase());
+      if (existsInDefaults || existsInCustom) {
+        return { ...state, categoriesError: `"${trimmed}" is already in the list.` };
+      }
+      return {
+        ...state,
+        customCategories: [...state.customCategories, trimmed],
+        customCategoryInput: '',
+        categoriesError: null,
+      };
+    }
+    case 'REMOVE_CUSTOM_CATEGORY':
+      return {
+        ...state,
+        customCategories: state.customCategories.filter(n => n !== action.name),
+        categoriesError: null,
+      };
+    case 'SET_SAVING_CATEGORIES':
+      return { ...state, isSavingCategories: action.value };
+    case 'SET_CATEGORIES_ERROR':
+      return { ...state, categoriesError: action.error };
     case 'SET_MOBILE_TOKEN':
       return { ...state, mobileToken: action.token };
     case 'SET_FEED_URL':
@@ -261,6 +329,7 @@ export function useOnboardingState() {
 export const STEPS: { id: StepId; label: string; required: boolean }[] = [
   { id: 'welcome', label: 'Welcome', required: true },
   { id: 'ai-provider', label: 'AI Provider', required: true },
+  { id: 'tag-categories', label: 'Tag Categories', required: false },
   { id: 'integrations', label: 'Integrations', required: false },
   { id: 'tutorial', label: 'Tutorial', required: false },
 ];

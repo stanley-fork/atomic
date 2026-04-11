@@ -31,6 +31,7 @@ pub struct Tag {
     pub name: String,
     pub parent_id: Option<String>,
     pub created_at: String,
+    pub is_autotag_target: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +176,12 @@ pub struct WikiCitation {
     pub atom_id: String,
     pub chunk_index: Option<i32>,
     pub excerpt: String,
+    /// The cited atom's source URL (e.g. `obsidian://VaultName/path.md`,
+    /// `https://...`, or null for atoms without a source). Joined from `atoms` at read time;
+    /// not stored on the `wiki_citations` row. `#[serde(default)]` keeps backward compatibility
+    /// with proposals serialized before this field existed.
+    #[serde(default)]
+    pub source_url: Option<String>,
 }
 
 /// Wiki article with all its citations

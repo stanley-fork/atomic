@@ -109,29 +109,25 @@ Tags help users navigate and filter their content. Users can browse by tag and g
 
 IMPORTANT:
 - Each tag MUST have a parent_name set to one of the existing top-level categories shown below
-- DO NOT create new top-level categories - only use the ones provided
+- DO NOT create new top-level categories - only use the ones the user has provided below
 - Tag names are case-insensitive and globally unique
 
-The tags listed below are a sample of commonly-used tags included as a point of reference for the kinds of tags in this system.
+The user has chosen which top-level categories the auto-tagger may extend. They are listed below along with a sample of existing sub-tags under each, as a point of reference for the kinds of tags in this system.
 
 HIERARCHY STRUCTURE:
 - Level 1: Categories (shown below) - use ONLY these existing categories as parent_name
-- Level 2: Specific tags (e.g., "AI", "John Smith", "San Francisco")
+- Level 2: Specific tags you create under those categories
 - Maximum 2 levels - no deeper nesting
 
-EXAMPLES:
-- {"name": "AI", "parent_name": "Topics"}
-- {"name": "Machine Learning", "parent_name": "Topics"}
-- {"name": "San Francisco", "parent_name": "Locations"}
-
 RESPONSE FORMAT:
-Return a JSON object with a "tags" array. Each tag is an object with "name" and "parent_name":
-{"tags": [{"name": "AI", "parent_name": "Topics"}, {"name": "San Francisco", "parent_name": "Locations"}]}
+Return a JSON object with a "tags" array. Each tag is an object with "name" and "parent_name", where parent_name is one of the categories shown below:
+{"tags": [{"name": "<specific tag>", "parent_name": "<category from the list below>"}]}
 
 Guidelines:
-- Create new Level 2 tags under existing categories when needed
-- Prefer broad tags like "John Smith" rather than overly specific tags such as "Early Life of John Smith"
-- Every tag must have a valid parent_name from the top-level categories"#;
+- Create new Level 2 tags under the user's existing categories when needed
+- Prefer broad tags rather than overly specific ones (e.g., "John Smith" instead of "Early Life of John Smith")
+- Every tag must have a valid parent_name from the top-level categories listed below
+- If none of the categories below feel like a natural fit for the content, return an empty tag list rather than forcing a poor match"#;
 
 /// Parse tag extractions from LLM output, handling both:
 /// - `{"tags": [...]}` (schema-enforced, OpenRouter/OpenAI)
@@ -406,9 +402,11 @@ pub async fn extract_tags_from_chunk(
 /// 2. For each category, shows only the top 10 most-used child tags (by atom count)
 /// 3. Excludes any tags at Level 3 or deeper
 pub fn get_tag_tree_for_llm(conn: &Connection) -> Result<String, String> {
-    // Step 1: Get top-level category tags
+    // Step 1: Get top-level category tags flagged as auto-tag targets.
+    // Tags without is_autotag_target = 1 are intentionally excluded so the
+    // auto-tagger only extends categories the user has opted into.
     let mut top_level_stmt = conn
-        .prepare("SELECT id, name FROM tags WHERE parent_id IS NULL ORDER BY name")
+        .prepare("SELECT id, name FROM tags WHERE parent_id IS NULL AND is_autotag_target = 1 ORDER BY name")
         .map_err(|e| format!("Failed to prepare top-level tag query: {}", e))?;
 
     let top_level_tags: Vec<(String, String)> = top_level_stmt
@@ -795,16 +793,16 @@ mod tests {
         let (db, _temp) = create_test_db();
         let conn = db.conn.lock().unwrap();
 
-        // Create a top-level tag
+        // Create a top-level tag flagged as an auto-tag target
         let tag_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO tags (id, name, parent_id, created_at) VALUES (?1, ?2, NULL, ?3)",
+            "INSERT INTO tags (id, name, parent_id, created_at, is_autotag_target) VALUES (?1, ?2, NULL, ?3, 1)",
             rusqlite::params![&tag_id, "Topics", &now],
         )
         .unwrap();
 
-        // Create a child tag
+        // Create a child tag (children inherit visibility via the parent filter)
         let child_id = uuid::Uuid::new_v4().to_string();
         conn.execute(
             "INSERT INTO tags (id, name, parent_id, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -817,6 +815,26 @@ mod tests {
         // Should have tree format
         assert!(result.contains("Topics"), "Should contain parent tag");
         assert!(result.contains("AI"), "Should contain child tag");
+    }
+
+    #[test]
+    fn test_get_tag_tree_for_llm_excludes_unflagged_top_level() {
+        let (db, _temp) = create_test_db();
+        let conn = db.conn.lock().unwrap();
+
+        // Create a top-level tag NOT flagged as an auto-tag target
+        let tag_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO tags (id, name, parent_id, created_at, is_autotag_target) VALUES (?1, ?2, NULL, ?3, 0)",
+            rusqlite::params![&tag_id, "Imported Folder", &now],
+        )
+        .unwrap();
+
+        let result = get_tag_tree_for_llm(&conn).unwrap();
+
+        // Unflagged tags must not appear; with no flagged tags the sentinel is returned
+        assert_eq!(result, "(no existing tags)");
     }
 
     // ==================== Tag Name Lookup Tests ====================

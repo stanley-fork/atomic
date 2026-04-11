@@ -32,7 +32,7 @@ pub fn get_conversation_tags(
     conversation_id: &str,
 ) -> Result<Vec<Tag>, AtomicCoreError> {
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.name, t.parent_id, t.created_at
+        "SELECT t.id, t.name, t.parent_id, t.created_at, t.is_autotag_target
          FROM tags t
          JOIN conversation_tags ct ON ct.tag_id = t.id
          WHERE ct.conversation_id = ?1
@@ -46,6 +46,7 @@ pub fn get_conversation_tags(
                 name: row.get(1)?,
                 parent_id: row.get(2)?,
                 created_at: row.get(3)?,
+                is_autotag_target: row.get::<_, i32>(4)? != 0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -280,7 +281,7 @@ fn batch_fetch_conversation_tags(
     }
     let placeholders = conv_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let query = format!(
-        "SELECT ct.conversation_id, t.id, t.name, t.parent_id, t.created_at
+        "SELECT ct.conversation_id, t.id, t.name, t.parent_id, t.created_at, t.is_autotag_target
          FROM conversation_tags ct
          JOIN tags t ON ct.tag_id = t.id
          WHERE ct.conversation_id IN ({})
@@ -297,6 +298,7 @@ fn batch_fetch_conversation_tags(
                 name: row.get(2)?,
                 parent_id: row.get(3)?,
                 created_at: row.get(4)?,
+                is_autotag_target: row.get::<_, i32>(5)? != 0,
             },
         ))
     })?;

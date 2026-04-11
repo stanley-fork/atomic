@@ -7,7 +7,7 @@ import { SearchableSelect } from '../ui/SearchableSelect';
 import { ConnectionStatus } from '../ui/ConnectionStatus';
 import { useSettingsStore } from '../../stores/settings';
 import { useAtomsStore } from '../../stores/atoms';
-import { useTagsStore } from '../../stores/tags';
+import { useTagsStore, type TagWithCount } from '../../stores/tags';
 import { THEMES, Theme } from '../../hooks/useTheme';
 import { FONTS, Font } from '../../hooks/useFont';
 import {
@@ -45,16 +45,166 @@ import { importMarkdownFolder, type ImportProgress } from '../../lib/import';
 import { formatRelativeDate } from '../../lib/date';
 import { useDatabasesStore, type DatabaseInfo, type DatabaseStats } from '../../stores/databases';
 
-type SettingsTab = 'general' | 'ai' | 'connection' | 'feeds' | 'integrations' | 'databases';
+export type SettingsTab = 'general' | 'ai' | 'tag-categories' | 'connection' | 'feeds' | 'integrations' | 'databases';
 
 const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'ai', label: 'AI Models' },
+  { id: 'tag-categories', label: 'Tags' },
   { id: 'connection', label: 'Connection' },
   { id: 'feeds', label: 'Feeds' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'databases', label: 'Databases' },
 ];
+
+function TagCategoriesTab() {
+  const tags = useTagsStore(s => s.tags);
+  const fetchTags = useTagsStore(s => s.fetchTags);
+  const setTagAutotagTarget = useTagsStore(s => s.setTagAutotagTarget);
+  const createTag = useTagsStore(s => s.createTag);
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchTags();
+  }, [fetchTags]);
+
+  // Top-level tags only — flag is currently constrained to root tags.
+  const topLevel = tags.filter(t => !t.parent_id);
+  const targets = topLevel.filter(t => t.is_autotag_target);
+  const available = topLevel.filter(t => !t.is_autotag_target);
+
+  const handleToggle = async (id: string, value: boolean) => {
+    setErrorMsg(null);
+    try {
+      await setTagAutotagTarget(id, value);
+    } catch (e) {
+      setErrorMsg(String(e));
+    }
+  };
+
+  const handleCreate = async () => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    if (trimmed.includes('/')) {
+      setErrorMsg('Category names cannot contain "/".');
+      return;
+    }
+    if (topLevel.some(t => t.name.toLowerCase() === trimmed.toLowerCase())) {
+      setErrorMsg(`A top-level tag named "${trimmed}" already exists.`);
+      return;
+    }
+    setCreating(true);
+    setErrorMsg(null);
+    try {
+      const created = await createTag(trimmed);
+      await setTagAutotagTarget(created.id, true);
+      setNewName('');
+    } catch (e) {
+      setErrorMsg(String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="space-y-1">
+        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">Auto-Tag Categories</h3>
+        <p className="text-xs text-[var(--color-text-secondary)]">
+          The AI auto-tagger only creates new sub-tags under categories you mark as targets.
+        </p>
+      </div>
+
+      {targets.length === 0 && (
+        <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
+          No auto-tag targets configured. Auto-tagging will be skipped for new atoms until you mark at least one category.
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <div className="text-xs font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">Active targets</div>
+        {targets.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-secondary)] italic">None yet.</p>
+        ) : (
+          <div className="space-y-1">
+            {targets.map(tag => (
+              <div
+                key={tag.id}
+                className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-main)]"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm text-[var(--color-text-primary)] truncate">{tag.name}</span>
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">
+                    {(tag as TagWithCount).atom_count} atoms
+                  </span>
+                </div>
+                <button
+                  onClick={() => handleToggle(tag.id, false)}
+                  className="px-2 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] rounded transition-colors"
+                >
+                  Unflag
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-xs font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">Available top-level tags</div>
+        {available.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-secondary)] italic">All your top-level tags are already targets.</p>
+        ) : (
+          <div className="space-y-1">
+            {available.map(tag => (
+              <div
+                key={tag.id}
+                className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-main)]"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm text-[var(--color-text-primary)] truncate">{tag.name}</span>
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">
+                    {(tag as TagWithCount).atom_count} atoms
+                  </span>
+                </div>
+                <button
+                  onClick={() => handleToggle(tag.id, true)}
+                  className="px-2 py-1 text-xs text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] rounded transition-colors"
+                >
+                  Mark as target
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-xs font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">Create new target</div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleCreate(); }}
+            placeholder="e.g., Methodologies"
+            disabled={creating}
+            className="flex-1 bg-[var(--color-bg-main)] border border-[var(--color-border)] rounded px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+          />
+          <Button onClick={handleCreate} disabled={creating || !newName.trim()}>
+            {creating ? 'Adding…' : 'Add'}
+          </Button>
+        </div>
+      </div>
+
+      {errorMsg && (
+        <div className="text-xs text-red-400">{errorMsg}</div>
+      )}
+    </>
+  );
+}
 
 function DatabasesTab() {
   const { databases, activeId, fetchDatabases, renameDatabase, deleteDatabase, setDefaultDatabase, getDatabaseStats } = useDatabasesStore();
@@ -237,9 +387,10 @@ function DatabasesTab() {
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: SettingsTab;
 }
 
-export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const settings = useSettingsStore(s => s.settings);
   const fetchSettings = useSettingsStore(s => s.fetchSettings);
   const setSetting = useSettingsStore(s => s.setSetting);
@@ -311,7 +462,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'general');
+
+  // When the modal is reopened with a new initialTab, sync the active tab.
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   // MCP setup state
   const [showMcpSetup, setShowMcpSetup] = useState(false);
@@ -925,12 +1083,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </button>
           </div>
 
-          <div className="flex gap-1 mt-4 -mb-4 px-0">
+          <div className="flex gap-1 mt-4 -mb-4 px-0 overflow-x-auto">
               {SETTINGS_TABS.map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`px-3 py-2 text-sm font-medium rounded-t-md transition-colors ${
+                  className={`px-3 py-2 text-sm font-medium rounded-t-md transition-colors whitespace-nowrap flex-shrink-0 ${
                     activeTab === tab.id
                       ? 'bg-[var(--color-bg-main)] text-[var(--color-text-primary)] border border-b-0 border-[var(--color-border)]'
                       : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
@@ -1697,6 +1855,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     )}
                   </div>
                 </>
+              )}
+
+              {/* ===== TAG CATEGORIES TAB ===== */}
+              {activeTab === 'tag-categories' && (
+                <TagCategoriesTab />
               )}
 
               {/* ===== CONNECTION TAB ===== */}

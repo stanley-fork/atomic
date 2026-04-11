@@ -3,10 +3,12 @@ import { Button } from '../ui/Button';
 import { StepIndicator } from './StepIndicator';
 import { useOnboardingState, STEPS } from './useOnboardingState';
 import { useSettingsStore } from '../../stores/settings';
+import { useTagsStore } from '../../stores/tags';
 import { isDesktopApp, getTransport } from '../../lib/transport';
 
 import { WelcomeStep } from './steps/WelcomeStep';
 import { AIProviderStep } from './steps/AIProviderStep';
+import { TagCategoriesStep } from './steps/TagCategoriesStep';
 import { IntegrationsStep } from './steps/IntegrationsStep';
 import { TutorialStep } from './steps/TutorialStep';
 
@@ -18,6 +20,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [state, dispatch] = useOnboardingState();
   const setSetting = useSettingsStore(s => s.setSetting);
   const testOpenRouterConnection = useSettingsStore(s => s.testOpenRouterConnection);
+  const configureAutotagTargets = useTagsStore(s => s.configureAutotagTargets);
 
   const currentStepDef = STEPS[state.currentStep];
   const isFirstStep = state.currentStep === 0;
@@ -103,6 +106,20 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       await saveProviderSettings();
     }
 
+    // Save tag categories when leaving the tag-categories step (only if auto-tagging is enabled)
+    if (currentStepDef.id === 'tag-categories' && state.autoTaggingEnabled) {
+      dispatch({ type: 'SET_SAVING_CATEGORIES', value: true });
+      try {
+        await configureAutotagTargets(state.selectedDefaultCategories, state.customCategories);
+        dispatch({ type: 'SET_CATEGORIES_ERROR', error: null });
+      } catch (e) {
+        dispatch({ type: 'SET_CATEGORIES_ERROR', error: String(e) });
+        dispatch({ type: 'SET_SAVING_CATEGORIES', value: false });
+        return;
+      }
+      dispatch({ type: 'SET_SAVING_CATEGORIES', value: false });
+    }
+
     if (isLastStep) {
       onComplete();
     } else {
@@ -134,6 +151,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         return <WelcomeStep state={state} dispatch={dispatch} onNext={handleNext} onComplete={onComplete} />;
       case 'ai-provider':
         return <AIProviderStep state={state} dispatch={dispatch} />;
+      case 'tag-categories':
+        return <TagCategoriesStep state={state} dispatch={dispatch} />;
       case 'integrations':
         return <IntegrationsStep state={state} dispatch={dispatch} />;
       case 'tutorial':

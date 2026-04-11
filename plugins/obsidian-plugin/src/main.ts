@@ -6,6 +6,7 @@ import { SyncState, type SyncStateData } from "./sync-state";
 import { SearchModal } from "./search-modal";
 import { SimilarView, SIMILAR_VIEW_TYPE } from "./similar-view";
 import { WikiView, WIKI_VIEW_TYPE } from "./wiki-view";
+import { OnboardingModal } from "./onboarding-modal";
 
 interface PluginData {
   settings: AtomicSettings;
@@ -69,17 +70,34 @@ export default class AtomicPlugin extends Plugin {
       callback: () => this.activateView(WIKI_VIEW_TYPE),
     });
 
+    this.addCommand({
+      id: "setup-wizard",
+      name: "Setup Wizard",
+      callback: () => new OnboardingModal(this.app, this).open(),
+    });
+
     // Register sidebar views
     this.registerView(SIMILAR_VIEW_TYPE, (leaf) => {
       const syncState = SyncState.fromJSON(this.syncEngine.getSyncStateData());
       return new SimilarView(leaf, this.client, () => syncState);
     });
 
-    this.registerView(WIKI_VIEW_TYPE, (leaf) => new WikiView(leaf, this.client));
+    this.registerView(WIKI_VIEW_TYPE, (leaf) => new WikiView(
+      leaf,
+      this.client,
+      () => this.settings.vaultName || this.app.vault.getName(),
+    ));
 
-    // Auto-sync if enabled
-    if (this.settings.autoSync) {
+    // Auto-sync if enabled (skip if not yet configured)
+    if (this.settings.authToken && this.settings.autoSync) {
       this.syncEngine.startWatching();
+    }
+
+    // First-run: open onboarding wizard if no auth token configured
+    if (!this.settings.authToken) {
+      setTimeout(() => {
+        new OnboardingModal(this.app, this).open();
+      }, 500);
     }
 
     // Status bar

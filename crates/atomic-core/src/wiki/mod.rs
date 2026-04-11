@@ -440,6 +440,7 @@ async fn generate_section_ops_proposal(
                 atom_id: existing_citation.atom_id.clone(),
                 chunk_index: existing_citation.chunk_index,
                 excerpt: existing_citation.excerpt.clone(),
+                source_url: existing_citation.source_url.clone(),
             });
         } else if let Some(chunk) = new_by_index.get(&index) {
             let excerpt = if chunk.content.len() > 300 {
@@ -460,6 +461,8 @@ async fn generate_section_ops_proposal(
                 atom_id: chunk.atom_id.clone(),
                 chunk_index: Some(chunk.chunk_index),
                 excerpt,
+                // Populated by the read path's JOIN; not stored on the row.
+                source_url: None,
             });
         } else {
             tracing::warn!(
@@ -738,6 +741,8 @@ pub(crate) fn extract_citations(
                         atom_id: chunk.atom_id.clone(),
                         chunk_index: Some(chunk.chunk_index),
                         excerpt,
+                        // Populated by the read path's JOIN; not stored on the row.
+                        source_url: None,
                     });
                 }
             }
@@ -986,6 +991,8 @@ fn archive_existing_article(conn: &Connection, tag_id: &str) -> Result<(), Strin
                 atom_id: row.get(2)?,
                 chunk_index: row.get(3)?,
                 excerpt: row.get(4)?,
+                // Version archive read path; source_url not needed here.
+                source_url: None,
             })
         })
         .map_err(|e| format!("Failed to query citations: {}", e))?
@@ -1110,10 +1117,16 @@ pub fn load_wiki_article(
         None => return Ok(None),
     };
 
-    // Get citations
+    // Get citations, joining atoms for source_url so clients can render
+    // citations differently based on the cited atom's origin (e.g. Obsidian
+    // plugin rewriting them as wikilinks).
     let mut stmt = conn
         .prepare(
-            "SELECT id, citation_index, atom_id, chunk_index, excerpt FROM wiki_citations WHERE wiki_article_id = ?1 ORDER BY citation_index"
+            "SELECT c.id, c.citation_index, c.atom_id, c.chunk_index, c.excerpt, a.source_url
+             FROM wiki_citations c
+             LEFT JOIN atoms a ON a.id = c.atom_id
+             WHERE c.wiki_article_id = ?1
+             ORDER BY c.citation_index"
         )
         .map_err(|e| format!("Failed to prepare citations query: {}", e))?;
 
@@ -1125,6 +1138,7 @@ pub fn load_wiki_article(
                 atom_id: row.get(2)?,
                 chunk_index: row.get(3)?,
                 excerpt: row.get(4)?,
+                source_url: row.get(5)?,
             })
         })
         .map_err(|e| format!("Failed to query citations: {}", e))?
@@ -1705,6 +1719,7 @@ mod tests {
             atom_id: "atom1".to_string(),
             chunk_index: Some(0),
             excerpt: "Source text here".to_string(),
+            source_url: None,
         }];
 
         // Save

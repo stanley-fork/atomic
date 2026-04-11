@@ -6,6 +6,7 @@ export interface Tag {
   name: string;
   parent_id: string | null;
   created_at: string;
+  is_autotag_target: boolean;
 }
 
 export interface TagWithCount extends Tag {
@@ -38,6 +39,8 @@ interface TagsStore {
   createTag: (name: string, parentId?: string) => Promise<Tag>;
   updateTag: (id: string, name: string, parentId?: string) => Promise<Tag>;
   deleteTag: (id: string, recursive?: boolean) => Promise<void>;
+  setTagAutotagTarget: (id: string, value: boolean) => Promise<void>;
+  configureAutotagTargets: (keepDefaults: string[], addCustom: string[]) => Promise<Tag[]>;
   compactTags: () => Promise<CompactionResult>;
   clearError: () => void;
   reset: () => void;
@@ -182,6 +185,34 @@ export const useTagsStore = create<TagsStore>((set, get) => ({
       // Refetch tags to get updated tree structure
       const tags = await getTransport().invoke<TagWithCount[]>('get_all_tags');
       set({ tags });
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
+  setTagAutotagTarget: async (id: string, value: boolean) => {
+    set({ error: null });
+    try {
+      await getTransport().invoke('set_tag_autotag_target', { id, value });
+      const tags = await getTransport().invoke<TagWithCount[]>('get_all_tags');
+      set({ tags });
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
+  configureAutotagTargets: async (keepDefaults: string[], addCustom: string[]) => {
+    set({ error: null });
+    try {
+      const created = await getTransport().invoke<Tag[]>('configure_autotag_targets', {
+        keepDefaults,
+        addCustom,
+      });
+      const tags = await getTransport().invoke<TagWithCount[]>('get_all_tags');
+      set({ tags });
+      return created;
     } catch (error) {
       set({ error: String(error) });
       throw error;

@@ -15,8 +15,8 @@ macro_rules! db_err {
 impl PostgresStorage {
     /// Fetch tags for a single atom.
     async fn tags_for_atom(&self, atom_id: &str) -> StorageResult<Vec<Tag>> {
-        let rows: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
-            "SELECT t.id, t.name, t.parent_id, t.created_at
+        let rows: Vec<(String, String, Option<String>, String, bool)> = sqlx::query_as(
+            "SELECT t.id, t.name, t.parent_id, t.created_at, t.is_autotag_target
              FROM tags t
              JOIN atom_tags at ON t.id = at.tag_id
              WHERE at.atom_id = $1 AND at.db_id = $2
@@ -30,11 +30,12 @@ impl PostgresStorage {
 
         Ok(rows
             .into_iter()
-            .map(|(id, name, parent_id, created_at)| Tag {
+            .map(|(id, name, parent_id, created_at, is_autotag_target)| Tag {
                 id,
                 name,
                 parent_id,
                 created_at,
+                is_autotag_target,
             })
             .collect())
     }
@@ -53,7 +54,7 @@ impl PostgresStorage {
         // Build dynamic placeholders $1, $2, ... (reserve $1 for db_id)
         let placeholders: Vec<String> = (2..=atom_ids.len() + 1).map(|i| format!("${}", i)).collect();
         let sql = format!(
-            "SELECT at.atom_id, t.id, t.name, t.parent_id, t.created_at
+            "SELECT at.atom_id, t.id, t.name, t.parent_id, t.created_at, t.is_autotag_target
              FROM atom_tags at
              JOIN tags t ON t.id = at.tag_id
              WHERE at.db_id = $1 AND at.atom_id IN ({})
@@ -61,7 +62,7 @@ impl PostgresStorage {
             placeholders.join(", ")
         );
 
-        let mut query = sqlx::query_as::<_, (String, String, String, Option<String>, String)>(&sql);
+        let mut query = sqlx::query_as::<_, (String, String, String, Option<String>, String, bool)>(&sql);
         query = query.bind(&self.db_id);
         for id in atom_ids {
             query = query.bind(id);
@@ -73,12 +74,13 @@ impl PostgresStorage {
             .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
 
         let mut map: HashMap<String, Vec<Tag>> = HashMap::new();
-        for (atom_id, tag_id, name, parent_id, created_at) in rows {
+        for (atom_id, tag_id, name, parent_id, created_at, is_autotag_target) in rows {
             map.entry(atom_id).or_default().push(Tag {
                 id: tag_id,
                 name,
                 parent_id,
                 created_at,
+                is_autotag_target,
             });
         }
 

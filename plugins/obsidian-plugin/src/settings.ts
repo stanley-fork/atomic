@@ -4,6 +4,7 @@ import type AtomicPlugin from "./main";
 export interface AtomicSettings {
   serverUrl: string;
   authToken: string;
+  databaseName: string;
   vaultName: string;
   autoSync: boolean;
   syncDebounceMs: number;
@@ -15,8 +16,9 @@ export interface AtomicSettings {
 export const DEFAULT_SETTINGS: AtomicSettings = {
   serverUrl: "http://localhost:8080",
   authToken: "",
+  databaseName: "",
   vaultName: "",
-  autoSync: false,
+  autoSync: true,
   syncDebounceMs: 2000,
   excludePatterns: [".obsidian/**", ".trash/**", ".git/**", "node_modules/**"],
   syncFolderTags: true,
@@ -66,6 +68,26 @@ export class AtomicSettingTab extends PluginSettingTab {
           });
         text.inputEl.type = "password";
       });
+
+    let dbDebounce: ReturnType<typeof setTimeout> | null = null;
+    new Setting(containerEl)
+      .setName("Database")
+      .setDesc("Name of the Atomic database to sync with (leave empty for default)")
+      .addText((text) =>
+        text
+          .setPlaceholder("default")
+          .setValue(this.plugin.settings.databaseName)
+          .onChange(async (value) => {
+            this.plugin.settings.databaseName = value;
+            await this.plugin.saveSettings();
+            if (dbDebounce) clearTimeout(dbDebounce);
+            dbDebounce = setTimeout(() => {
+              this.plugin.syncEngine.resetAndResync().catch((e) =>
+                console.error("Atomic: resetAndResync failed:", e)
+              );
+            }, 1500);
+          })
+      );
 
     new Setting(containerEl)
       .setName("Test Connection")

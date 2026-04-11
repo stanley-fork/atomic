@@ -41,6 +41,8 @@ pub use utoipa_scalar::{Scalar, Servable};
         routes::atoms::create_tag,
         routes::atoms::update_tag,
         routes::atoms::delete_tag,
+        routes::atoms::set_tag_autotag_target,
+        routes::atoms::configure_autotag_targets,
         // Search
         routes::search::search,
         routes::search::find_similar,
@@ -184,6 +186,8 @@ pub use utoipa_scalar::{Scalar, Servable};
         routes::atoms::UpdateAtomRequest,
         routes::atoms::CreateTagRequest,
         routes::atoms::UpdateTagRequest,
+        routes::atoms::SetAutotagTargetRequest,
+        routes::atoms::ConfigureAutotagTargetsRequest,
         routes::search::SearchRequest,
         routes::wiki::GenerateWikiBody,
         routes::settings::SetSettingBody,

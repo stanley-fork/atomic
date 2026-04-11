@@ -42,7 +42,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // Tags
     cfg.route("/tags", web::get().to(atoms::get_tags));
     cfg.route("/tags", web::post().to(atoms::create_tag));
+    cfg.route("/tags/configure-autotag-targets", web::post().to(atoms::configure_autotag_targets));
     cfg.route("/tags/{id}/children", web::get().to(atoms::get_tag_children));
+    cfg.route("/tags/{id}/autotag-target", web::put().to(atoms::set_tag_autotag_target));
     cfg.route("/tags/{id}", web::put().to(atoms::update_tag));
     cfg.route("/tags/{id}", web::delete().to(atoms::delete_tag));
 

@@ -43,7 +43,12 @@ function flattenVisibleTags(
   return result;
 }
 
-export function TagTree() {
+interface TagTreeProps {
+  /** Called when the user clicks "Configure" in the empty-state notice. */
+  onOpenTagSettings?: () => void;
+}
+
+export function TagTree({ onOpenTagSettings }: TagTreeProps = {}) {
   const tags = useTagsStore(s => s.tags);
   const isLoading = useTagsStore(s => s.isLoading);
   const createTag = useTagsStore(s => s.createTag);
@@ -253,8 +258,18 @@ export function TagTree() {
             ))}
           </div>
         ) : tags.length === 0 ? (
-          <div className="px-3 py-4 text-sm text-[var(--color-text-tertiary)] text-center">
-            No tags yet
+          <div className="px-3 py-4 space-y-3">
+            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+              No tag categories are configured for this database, so auto-tagging is off. Set up categories to let Atomic tag your atoms automatically.
+            </p>
+            {onOpenTagSettings && (
+              <button
+                onClick={onOpenTagSettings}
+                className="w-full px-3 py-1.5 text-xs font-medium rounded bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] transition-colors"
+              >
+                Configure categories
+              </button>
+            )}
           </div>
         ) : (
           <div
