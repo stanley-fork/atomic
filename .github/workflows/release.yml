@@ -154,3 +154,33 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  notify-discord:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Post changelog to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          notes=$(awk '
+            /^## / { count++ }
+            count == 2 { exit }
+            count == 1 { print }
+          ' CHANGELOG.md)
+          release_url="https://github.com/${REPO}/releases/tag/${TAG}"
+          content="**Atomic ${TAG}** released — ${release_url}
+
+${notes}"
+          # Discord content cap is 2000 chars; leave headroom for the ellipsis.
+          if [ ${#content} -gt 1900 ]; then
+            content="${content:0:1900}…"
+          fi
+          jq -n --arg content "$content" '{content: $content}' \
+            | curl -sS --fail -H "Content-Type: application/json" \
+                -X POST -d @- "$DISCORD_WEBHOOK_URL"
