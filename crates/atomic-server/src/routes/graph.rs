@@ -45,7 +45,14 @@ pub async fn get_atom_neighborhood(
     blocking_ok(move || core.get_atom_neighborhood(&atom_id, depth, min_similarity)).await
 }
 
-#[utoipa::path(post, path = "/api/graph/rebuild-edges", responses((status = 200, description = "Edges rebuilt")), tag = "graph")]
+/// Queue a full rebuild of the semantic-edge graph.
+///
+/// Returns the number of atoms **queued** for edge recomputation, not the
+/// number of edges written. The actual edge computation runs asynchronously
+/// on the background pipeline; this endpoint returns as soon as the work
+/// is spawned. Clients that need completion should subscribe to pipeline
+/// events over WebSocket.
+#[utoipa::path(post, path = "/api/graph/rebuild-edges", responses((status = 200, description = "Edge rebuild queued; returns the number of atoms queued for recomputation")), tag = "graph")]
 pub async fn rebuild_semantic_edges(db: Db) -> HttpResponse {
     let core = db.0;
     blocking_ok(move || core.rebuild_semantic_edges()).await

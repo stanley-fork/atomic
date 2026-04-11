@@ -127,6 +127,10 @@ struct CanvasCacheInner {
     data: std::sync::RwLock<Option<Arc<GlobalCanvasData>>>,
     rebuild_gen: std::sync::atomic::AtomicU64,
     rebuilder: std::sync::OnceLock<CanvasRebuilder>,
+    /// Serializes concurrent cold-cache computes so N simultaneous misses
+    /// don't all pay the full PCA + edge-load cost. Paired with a
+    /// double-checked read of `data` on either side of the lock acquire.
+    compute_lock: std::sync::Mutex<()>,
 }
 
 impl CanvasCache {
@@ -160,6 +164,16 @@ impl CanvasCache {
     /// First call wins (backed by `OnceLock`); subsequent calls are no-ops.
     pub(crate) fn set_rebuilder(&self, rebuilder: CanvasRebuilder) {
         let _ = self.inner.rebuilder.set(rebuilder);
+    }
+
+    /// Acquire the compute guard used by [`AtomicCore::compute_and_get_canvas_data`]
+    /// to serialize cold-cache rebuilds. The caller double-checks the cache
+    /// after acquiring so only the first waiter pays the compute cost.
+    pub(crate) fn compute_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, AtomicCoreError> {
+        self.inner
+            .compute_lock
+            .lock()
+            .map_err(|e| AtomicCoreError::Lock(e.to_string()))
     }
 
     /// Debounced invalidation: schedule a background rebuild after
@@ -1698,8 +1712,18 @@ impl AtomicCore {
     /// Works with both SQLite and Postgres backends via storage dispatch.
     ///
     /// Results are memoized via `canvas_cache`; subsequent calls return the
-    /// cached `Arc` until a mutation invalidates it.
+    /// cached `Arc` until a mutation invalidates it. Cold-cache rebuilds are
+    /// serialized by a compute guard so N simultaneous misses collapse into
+    /// one compute (the first waiter runs it; the rest re-read the cache).
     pub fn compute_and_get_canvas_data(&self) -> Result<Arc<GlobalCanvasData>, AtomicCoreError> {
+        if let Some(cached) = self.canvas_cache.get() {
+            return Ok(cached);
+        }
+        // Serialize the first compute so concurrent misses don't all pay the
+        // full PCA + edge-load cost. Double-checked after acquiring the
+        // guard — if another waiter already populated the cache while we
+        // blocked, use theirs.
+        let _guard = self.canvas_cache.compute_guard()?;
         if let Some(cached) = self.canvas_cache.get() {
             return Ok(cached);
         }
@@ -1872,7 +1896,14 @@ impl AtomicCore {
         self.storage.get_atom_neighborhood_sync(atom_id, depth, min_similarity)
     }
 
-    /// Rebuild semantic edges for all atoms with embeddings
+    /// Rebuild semantic edges for all atoms with embeddings.
+    ///
+    /// Returns the number of atoms **queued** for edge recomputation, not
+    /// the number of edges written. This call returns as soon as the edge
+    /// pipeline is spawned — actual edge computation runs in the background
+    /// and completes asynchronously. Callers watching for completion should
+    /// subscribe to pipeline events rather than treating the return value
+    /// as a completion signal.
     pub fn rebuild_semantic_edges(&self) -> Result<i32, AtomicCoreError> {
         let count = self.storage.rebuild_semantic_edges_sync()?;
         self.canvas_cache.invalidate();
