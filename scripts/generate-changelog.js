@@ -48,10 +48,12 @@ function collectCommitHistory(previousTag) {
   return { range, log, stat };
 }
 
-// Read-only tools the changelog agent is allowed to use. The agent inherits
+// Read-only built-ins the changelog agent is allowed to use. The agent inherits
 // the project's CLAUDE.md via settingSources, and uses these to inspect the
 // actual diffs, read source, and grep the repo — not just the commit subjects.
+// The custom submit_changelog tool is added alongside these at query time.
 const CHANGELOG_TOOLS = ['Bash', 'Read', 'Grep', 'Glob'];
+const SUBMIT_TOOL_NAME = 'mcp__changelog__submit_changelog';
 
 // Hard timeout so a runaway release script can't hang the build forever.
 const AGENT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -104,7 +106,47 @@ export async function generateChangelogBody(previousTag, newVersion) {
   }
 
   // Dynamic import so the SDK only loads when actually cutting a release.
-  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+  const { query, tool, createSdkMcpServer } = await import(
+    '@anthropic-ai/claude-agent-sdk'
+  );
+  const { z } = await import('zod');
+
+  // Capture the bullets the agent submits via the custom tool. Using a closure
+  // here (rather than parsing the final text message) is what makes preamble
+  // impossible by construction — we never read the model's free-form output.
+  let submittedBullets = null;
+
+  const submitChangelog = tool(
+    'submit_changelog',
+    'Submit the final CHANGELOG entry for this release. Call this exactly once, ' +
+      'at the end of your investigation, with the finalized bullets. Do not include ' +
+      'any surrounding prose — the `bullets` array is the entire changelog entry.',
+    {
+      bullets: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(6)
+        .describe(
+          'Markdown bullet lines without the leading "- ". Each entry is one ' +
+            'line, present tense, user-facing ("Add…", "Fix…", "Improve…"). ' +
+            '1 to 6 entries. Group related commits. If every commit is purely ' +
+            'internal, still submit at least one bullet with the most ' +
+            'user-relevant framing available.'
+        ),
+    },
+    async (args) => {
+      submittedBullets = args.bullets;
+      return {
+        content: [{ type: 'text', text: 'Changelog submitted.' }],
+      };
+    }
+  );
+
+  const changelogServer = createSdkMcpServer({
+    name: 'changelog',
+    version: '1.0.0',
+    tools: [submitChangelog],
+  });
 
   const range = previousTag ? `${previousTag}..HEAD` : 'HEAD';
 
@@ -137,19 +179,26 @@ Use your tools to understand what actually changed:
 Your goal is a concise, accurate, user-facing changelog — even when that
 requires more context than what the commit messages say.
 
-When you're done, respond with the final CHANGELOG entry:
-- 3 to 6 markdown bullet points, bullets only. No heading, no preamble, no
-  trailing commentary, no code fences.
-- Each bullet is one line, present tense, user-facing ("Add…", "Fix…", "Improve…").
+When you're done investigating, submit the finalized entry by calling the
+\`submit_changelog\` tool with a \`bullets\` array. That tool call IS the
+changelog — do not also print the entry as text. Anything you write outside
+of the tool call is ignored.
+
+Content rules for the bullets:
+- 1 to 6 entries. Each entry is one line, present tense, user-facing
+  ("Add…", "Fix…", "Improve…"). No leading "- " — the array entries are
+  already bullets.
 - Group related commits into a single bullet where it makes sense.
-- Omit purely internal refactors, dependency bumps, and CI changes unless they
-  have a visible effect.
-- Don't invent features that aren't actually in the diff.`;
+- Prefer omitting purely internal refactors, dependency bumps, and CI changes.
+  But if *every* commit in the range is internal, still submit at least one
+  bullet with the most user-relevant framing available (e.g. "Improve internal
+  release infrastructure") rather than refusing.
+- Don't invent features that aren't actually in the diff.
+- Call \`submit_changelog\` exactly once.`;
 
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), AGENT_TIMEOUT_MS);
 
-  let resultText = '';
   let errorSubtype = null;
   let errors = [];
 
@@ -160,21 +209,19 @@ When you're done, respond with the final CHANGELOG entry:
         cwd: PROJECT_ROOT,
         settingSources: ['project'],
         tools: CHANGELOG_TOOLS,
-        allowedTools: CHANGELOG_TOOLS,
+        mcpServers: { changelog: changelogServer },
+        allowedTools: [...CHANGELOG_TOOLS, SUBMIT_TOOL_NAME],
         // Unattended build script — auto-approve tool calls. The tool allowlist
-        // above (read-only exploration) is the real safety boundary.
+        // above (read-only exploration + submit_changelog) is the real safety
+        // boundary.
         permissionMode: 'bypassPermissions',
         abortController,
       },
     })) {
       logAgentProgress(message);
-      if (message.type === 'result') {
-        if (message.subtype === 'success') {
-          resultText = message.result.trim();
-        } else {
-          errorSubtype = message.subtype;
-          errors = message.errors ?? [];
-        }
+      if (message.type === 'result' && message.subtype !== 'success') {
+        errorSubtype = message.subtype;
+        errors = message.errors ?? [];
       }
     }
   } finally {
@@ -185,11 +232,16 @@ When you're done, respond with the final CHANGELOG entry:
     const detail = errors.length ? `\n${errors.join('\n')}` : '';
     throw new Error(`Claude Agent SDK returned error subtype: ${errorSubtype}${detail}`);
   }
-  if (!resultText) {
-    throw new Error('Claude Agent SDK returned no result message.');
+  if (!submittedBullets || submittedBullets.length === 0) {
+    throw new Error(
+      'Changelog agent finished without calling submit_changelog. ' +
+        'Nothing to write to CHANGELOG.md.'
+    );
   }
 
-  return resultText;
+  return submittedBullets
+    .map((line) => `- ${line.trim().replace(/^-+\s*/, '')}`)
+    .join('\n');
 }
 
 /**
