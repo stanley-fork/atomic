@@ -438,23 +438,9 @@ export const useUIStore = create<UIStore>()(
       clearChatSidebarInitial: () =>
         set({ chatSidebarInitialTagId: null, chatSidebarInitialConversationId: null }),
 
-      setViewMode: (mode: ViewMode) =>
-        set((state) => {
-          // Dashboard is a focus view — auto-hide the left sidebar on entry
-          // and restore it when returning to a spatial view (atoms/canvas).
-          // Wiki view is left alone since the sidebar there is the wiki list,
-          // which users may want open or closed independent of this rule.
-          if (mode === 'dashboard') {
-            return { viewMode: mode, leftPanelOpen: false };
-          }
-          if (
-            state.viewMode === 'dashboard' &&
-            (mode === 'atoms' || mode === 'canvas')
-          ) {
-            return { viewMode: mode, leftPanelOpen: true };
-          }
-          return { viewMode: mode };
-        }),
+      setViewMode: (mode: ViewMode) => set({
+        viewMode: mode,
+      }),
 
       setAtomsLayout: (layout: AtomsLayout) => set({ atomsLayout: layout }),
 
@@ -576,17 +562,6 @@ export const useUIStore = create<UIStore>()(
           state.viewMode = 'atoms';
         }
         return state;
-      },
-      // leftPanelOpen is not persisted — derive its initial value from the
-      // rehydrated viewMode so the first paint already has the sidebar closed
-      // when loading into dashboard view. (onRehydrateStorage would run after
-      // the first render and cause a visible slide-in.)
-      merge: (persistedState, currentState) => {
-        const merged = { ...currentState, ...(persistedState as object) } as UIStore;
-        if ((persistedState as { viewMode?: ViewMode } | undefined)?.viewMode === 'dashboard') {
-          merged.leftPanelOpen = false;
-        }
-        return merged;
       },
     }
   )
