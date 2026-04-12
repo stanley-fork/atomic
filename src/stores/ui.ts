@@ -48,12 +48,12 @@ interface WikiReaderState {
   tagName: string | null;
 }
 
-type OverlayNavEntry =
+export type OverlayNavEntry =
   | { type: 'reader'; atomId: string; highlightText?: string | null }
   | { type: 'graph'; atomId: string }
   | { type: 'wiki'; tagId: string; tagName: string }
 
-interface OverlayNav {
+export interface OverlayNav {
   stack: OverlayNavEntry[];
   index: number; // -1 = no overlay open
 }

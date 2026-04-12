@@ -10,6 +10,19 @@ import type { NavigateFunction } from 'react-router-dom';
 /// what lets Zustand actions drive routing without restructuring callers.
 let navigateFn: NavigateFunction | null = null;
 
+/// Monotonic sequence tag embedded in `history.state.seq` on every navigate.
+/// RouterBridge compares the incoming entry's seq against the previous one to
+/// distinguish forward navigation (new push or step-forward) from back
+/// navigation (history popstate) — browsers don't expose that directionally
+/// otherwise. Without it, the overlay stack grows without bound on back
+/// navigation. See RouterBridge for the reconciliation logic.
+let seqCounter = 0;
+
+/// Represents the state we may inject when navigating. Bridge also reads this.
+export interface NavigateState {
+  seq: number;
+}
+
 export function setNavigateFn(nav: NavigateFunction): void {
   navigateFn = nav;
 }
@@ -17,7 +30,8 @@ export function setNavigateFn(nav: NavigateFunction): void {
 /// Push a new URL. No-op if the router isn't mounted yet (e.g. during
 /// onboarding the layout renders before RouterBridge).
 export function navigateTo(to: string, options?: { replace?: boolean }): void {
-  navigateFn?.(to, options);
+  seqCounter += 1;
+  navigateFn?.(to, { replace: options?.replace, state: { seq: seqCounter } });
 }
 
 /// Step back in browser history. If no history exists, fall back to the

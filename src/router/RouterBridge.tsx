@@ -1,8 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useUIStore } from '../stores/ui';
-import { parseLocation } from './routes';
-import { setNavigateFn } from './navigate-ref';
+import { useUIStore, type OverlayNav, type OverlayNavEntry } from '../stores/ui';
+import { parseLocation, type ParsedRoute } from './routes';
+import { setNavigateFn, type NavigateState } from './navigate-ref';
 
 /// Glue between react-router-dom (URL) and Zustand (UI store).
 ///
@@ -11,16 +11,84 @@ import { setNavigateFn } from './navigate-ref';
 ///      `setNavigateFn` so store actions can write URLs.
 ///   2. Reconcile the store to the URL on every location change. URL is the
 ///      source of truth for routed state (viewMode, selectedTagId,
-///      readerState, wikiReaderState). The store is the source of truth for
-///      UI-only state (editing, saveStatus, panel widths, etc.).
+///      readerState, wikiReaderState, localGraph). The store is the source
+///      of truth for UI-only state (editing, saveStatus, panel widths, etc.)
 ///
-/// The "URL → store" direction is the tricky one: we read location, compute
-/// what the store *should* look like, and `set` any diffs. This runs on both
-/// programmatic `navigate()` calls and real browser back/forward, so both
-/// produce identical store state.
+/// The stack reconciliation uses a `seq` embedded in `history.state` to
+/// distinguish forward navigation from back navigation (popstate). Without
+/// it, every browser-back would look like "URL doesn't match top of stack"
+/// and Bridge would *append* instead of decrementing the index — the stack
+/// would grow without bound across back/forward cycles.
+
+/// Does this stack entry correspond to the parsed URL?
+function matchesEntry(entry: OverlayNavEntry, parsed: ParsedRoute): boolean {
+  if (parsed.kind === 'reader') {
+    return entry.type === 'reader' && entry.atomId === parsed.atomId;
+  }
+  if (parsed.kind === 'graph') {
+    return entry.type === 'graph' && entry.atomId === parsed.atomId;
+  }
+  if (parsed.kind === 'wiki-reader') {
+    return entry.type === 'wiki' && entry.tagId === parsed.tagId;
+  }
+  return false;
+}
+
+/// Decide how to transform `overlayNav` given the URL we just arrived at
+/// and the direction we moved in. Returns the *same* reference when nothing
+/// needs to change, so callers can short-circuit a setState.
+function reconcileOverlayNav(
+  prev: OverlayNav,
+  parsed: ParsedRoute,
+  newEntry: OverlayNavEntry,
+  direction: 'forward' | 'back' | 'unknown',
+): OverlayNav {
+  const current = prev.stack[prev.index];
+  if (current && matchesEntry(current, parsed)) return prev; // idempotent
+
+  if (direction === 'back') {
+    // Search the whole stack: on popstate the user may jump back multiple
+    // entries in one step (not just index-1). Find the matching one and
+    // snap the index to it without disturbing forward entries.
+    const idx = prev.stack.findIndex((e) => matchesEntry(e, parsed));
+    if (idx >= 0) return { stack: prev.stack, index: idx };
+  }
+
+  if (direction === 'forward') {
+    const next = prev.stack[prev.index + 1];
+    if (next && matchesEntry(next, parsed)) {
+      return { stack: prev.stack, index: prev.index + 1 };
+    }
+  }
+
+  // Fresh navigation (forward push, cold-load, or directly-typed URL) —
+  // truncate anything ahead of the current index and append.
+  return {
+    stack: [...prev.stack.slice(0, prev.index + 1), newEntry],
+    index: prev.index + 1,
+  };
+}
+
+/// Build the overlay-stack entry for a URL. Shape has to match what actions
+/// push so `matchesEntry` correctly identifies "already there" cases.
+function entryForRoute(parsed: ParsedRoute): OverlayNavEntry | null {
+  if (parsed.kind === 'reader') {
+    return { type: 'reader', atomId: parsed.atomId };
+  }
+  if (parsed.kind === 'graph') {
+    return { type: 'graph', atomId: parsed.atomId };
+  }
+  if (parsed.kind === 'wiki-reader') {
+    return { type: 'wiki', tagId: parsed.tagId, tagName: parsed.tagName ?? '' };
+  }
+  return null;
+}
+
 export function RouterBridge() {
   const location = useLocation();
   const navigate = useNavigate();
+  const prevSeqRef = useRef<number | null>(null);
+  const didInjectSeqRef = useRef(false);
 
   // Publish the live navigate fn to the module-scope ref so store actions
   // can use it.
@@ -29,11 +97,35 @@ export function RouterBridge() {
   }, [navigate]);
 
   useEffect(() => {
+    // Read the seq our own `navigateTo` writes into history.state, or inject
+    // seq=0 into the cold-load entry so later back-navigations here have a
+    // known seq to compare against. Without this injection, a cold-loaded
+    // URL has no seq; after one forward navigation, browser-back to the
+    // cold URL would look like "seq became null" → direction undetectable.
+    const incomingState = (location.state ?? null) as NavigateState | null;
+    let seq = incomingState?.seq ?? null;
+    if (seq === null && !didInjectSeqRef.current) {
+      const existing = window.history.state ?? {};
+      window.history.replaceState({ ...existing, seq: 0 }, '', window.location.href);
+      seq = 0;
+    }
+    didInjectSeqRef.current = true;
+
+    const prevSeq = prevSeqRef.current;
+    const direction: 'forward' | 'back' | 'unknown' =
+      prevSeq === null || seq === null
+        ? 'unknown'
+        : seq > prevSeq
+        ? 'forward'
+        : seq < prevSeq
+        ? 'back'
+        : 'unknown'; // same seq = replace navigation; don't mutate stack
+    prevSeqRef.current = seq;
+
     const parsed = parseLocation(location.pathname, location.search);
     const store = useUIStore.getState();
 
     if (parsed.kind === 'view') {
-      // Leaving any overlay — clear reader/wiki state if present.
       const needsClear =
         store.readerState.atomId !== null ||
         store.wikiReaderState.tagId !== null ||
@@ -47,23 +139,23 @@ export function RouterBridge() {
           wikiReaderState: { tagId: null, tagName: null },
           overlayNav: { stack: [], index: -1 },
           localGraph: { ...store.localGraph, isOpen: false },
-          // Restore the left panel if we auto-collapsed it on overlay open.
-          // Mirrors the pre-routing behavior in `overlayBack`/`overlayDismiss`.
           ...(store.leftPanelOpenBeforeReader
             ? { leftPanelOpen: true, leftPanelOpenBeforeReader: false }
             : {}),
         });
       }
-    } else if (parsed.kind === 'reader') {
-      // Open atom overlay. Preserve `editing` if we're navigating to the same
-      // atom the reader is already showing (e.g. React re-render with no URL
-      // change) — otherwise a fresh atom starts in view mode.
-      const sameAtom = store.readerState.atomId === parsed.atomId;
-      const prevStack = store.overlayNav.stack;
-      const lastEntry = prevStack[store.overlayNav.index];
-      const alreadyTopOfStack =
-        lastEntry && lastEntry.type === 'reader' && lastEntry.atomId === parsed.atomId;
+      return;
+    }
 
+    // Overlay-kind (reader / graph / wiki-reader) share the same stack
+    // reconciliation + left-panel auto-collapse.
+    const newEntry = entryForRoute(parsed);
+    if (!newEntry) return;
+    const nextNav = reconcileOverlayNav(store.overlayNav, parsed, newEntry, direction);
+    const becameFirstOverlay = store.overlayNav.index === -1 && nextNav.index !== -1;
+
+    if (parsed.kind === 'reader') {
+      const sameAtom = store.readerState.atomId === parsed.atomId;
       useUIStore.setState({
         selectedTagId: parsed.tagId,
         readerState: {
@@ -74,27 +166,15 @@ export function RouterBridge() {
         },
         wikiReaderState: { tagId: null, tagName: null },
         // MainView gives `localGraph.isOpen` priority over reader in its
-        // dispatch — so we must close it here or chevron-back from graph
-        // to reader leaves the graph visible.
+        // dispatch — close it here or chevron-back from graph leaves the
+        // graph visible behind the "new" reader URL.
         localGraph: { ...store.localGraph, isOpen: false },
-        overlayNav: alreadyTopOfStack
-          ? store.overlayNav
-          : {
-              stack: [...prevStack.slice(0, store.overlayNav.index + 1), { type: 'reader', atomId: parsed.atomId }],
-              index: store.overlayNav.index + 1,
-            },
-        // Auto-collapse left panel on first overlay open (desktop), matching
-        // the pre-routing behavior.
-        ...(store.overlayNav.index === -1 && store.leftPanelOpen
+        overlayNav: nextNav,
+        ...(becameFirstOverlay && store.leftPanelOpen
           ? { leftPanelOpen: false, leftPanelOpenBeforeReader: true }
           : {}),
       });
     } else if (parsed.kind === 'graph') {
-      const prevStack = store.overlayNav.stack;
-      const lastEntry = prevStack[store.overlayNav.index];
-      const alreadyTopOfStack =
-        lastEntry && lastEntry.type === 'graph' && lastEntry.atomId === parsed.atomId;
-
       useUIStore.setState({
         selectedTagId: parsed.tagId,
         readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' },
@@ -103,53 +183,28 @@ export function RouterBridge() {
           isOpen: true,
           centerAtomId: parsed.atomId,
           depth: store.localGraph.depth,
-          // Reset graph-internal nav history when entering via URL — that
-          // history is ephemeral and belongs to this graph session.
           navigationHistory: [parsed.atomId],
         },
-        overlayNav: alreadyTopOfStack
-          ? store.overlayNav
-          : {
-              stack: [
-                ...prevStack.slice(0, store.overlayNav.index + 1),
-                { type: 'graph', atomId: parsed.atomId },
-              ],
-              index: store.overlayNav.index + 1,
-            },
-        ...(store.overlayNav.index === -1 && store.leftPanelOpen
+        overlayNav: nextNav,
+        ...(becameFirstOverlay && store.leftPanelOpen
           ? { leftPanelOpen: false, leftPanelOpenBeforeReader: true }
           : {}),
       });
     } else if (parsed.kind === 'wiki-reader') {
-      const prevStack = store.overlayNav.stack;
-      const lastEntry = prevStack[store.overlayNav.index];
-      const alreadyTopOfStack =
-        lastEntry && lastEntry.type === 'wiki' && lastEntry.tagId === parsed.tagId;
-
       useUIStore.setState({
         wikiReaderState: {
           tagId: parsed.tagId,
           tagName: parsed.tagName ?? store.wikiReaderState.tagName,
         },
         readerState: { atomId: null, highlightText: null, editing: false, saveStatus: 'idle' },
-        // Close the graph if it was showing — MainView prioritizes graph
-        // over wiki in its render dispatch.
         localGraph: { ...store.localGraph, isOpen: false },
-        overlayNav: alreadyTopOfStack
-          ? store.overlayNav
-          : {
-              stack: [
-                ...prevStack.slice(0, store.overlayNav.index + 1),
-                { type: 'wiki', tagId: parsed.tagId, tagName: parsed.tagName ?? '' },
-              ],
-              index: store.overlayNav.index + 1,
-            },
-        ...(store.overlayNav.index === -1 && store.leftPanelOpen
+        overlayNav: nextNav,
+        ...(becameFirstOverlay && store.leftPanelOpen
           ? { leftPanelOpen: false, leftPanelOpenBeforeReader: true }
           : {}),
       });
     }
-  }, [location.pathname, location.search]);
+  }, [location.pathname, location.search, location.state]);
 
   return null;
 }

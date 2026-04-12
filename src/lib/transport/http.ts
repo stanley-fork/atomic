@@ -52,6 +52,11 @@ export class HttpTransport implements Transport {
 
     const wakeUp = () => {
       if (!this.shouldReconnect || this.connected) return;
+      // If a connection attempt is already in flight, don't start another
+      // one — overwriting `this.ws` would orphan the pending socket, which
+      // could then resolve later, fire a spurious onConnectionChange, and
+      // leak an open WebSocket we'll never close.
+      if (this.ws && this.ws.readyState === WebSocket.CONNECTING) return;
       this.forceReconnectSoon();
     };
 
