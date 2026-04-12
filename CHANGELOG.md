@@ -2,6 +2,15 @@
 
 All notable changes to Atomic are documented here.
 
+## v1.21.4 — 2026-04-12
+
+- Add URL-based routing — views, tag filters, and open atoms/wikis are now reflected in the URL, enabling browser back/forward navigation and deep links
+- Add local cache for tag tree and atom list so the app paints instantly on launch instead of waiting for the network
+- Add PWA support for the web build (manifest, service worker, app icons) so the hosted server can be installed as a standalone app on mobile and desktop
+- Improve reconnect behavior: transient disconnects are hidden for 4 seconds instead of flashing a banner, and resuming from background reconnects immediately
+- Fix overlay back/forward chevrons navigating outside the current overlay session; they now stay scoped to reader/graph/wiki entries and disable at stack boundaries
+- Fix WebSocket reconnect race where resuming the app during a pending connection could orphan an in-flight socket
+
 ## v1.21.3 — 2026-04-12
 
 - Bundle the MCP bridge with the desktop app and auto-discover auth tokens, so local MCP setup requires no manual token configuration
