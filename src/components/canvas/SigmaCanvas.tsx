@@ -46,7 +46,7 @@ export function SigmaCanvas({ mode = 'main', onPreviewClick }: SigmaCanvasProps 
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [edgeThreshold, setEdgeThreshold] = useState(0);
   const edgeThresholdRef = useRef(0);
-  const edgeAnimProgress = useRef(1); // 0 = invisible, 1 = fully visible
+  const edgeAnimProgress = useRef(0); // 0 = invisible, 1 = fully visible
   const themeRef = useRef(theme);
   themeRef.current = theme;
 
@@ -397,14 +397,14 @@ export function SigmaCanvas({ mode = 'main', onPreviewClick }: SigmaCanvasProps 
         graph.setNodeAttribute(id, 'y', target.y);
       }
       edgeAnimProgress.current = 1;
+      sigma.refresh();
     } else {
-      edgeAnimProgress.current = 0;
       const animStart = performance.now();
       function animateTick(now: number) {
         if (cancelledAnim) return;
         const elapsed = now - animStart;
 
-        // Node positions: 0 → target over 2.5s, cubic ease-out
+        // Node positions: 0 → target over 2s, cubic ease-out
         const nt = Math.min(1, elapsed / 2000);
         const ne = 1 - (1 - nt) ** 3;
         for (const [id, target] of Object.entries(targetPositions)) {
@@ -413,9 +413,14 @@ export function SigmaCanvas({ mode = 'main', onPreviewClick }: SigmaCanvasProps 
           graph.setNodeAttribute(id, 'y', target.y * ne);
         }
 
-        // Edge fade: 0 → 1 over 3s, ease-in
+        // Edge fade: 0 → 1 over 2.5s, ease-in
         const et = Math.min(1, elapsed / 2500);
         edgeAnimProgress.current = et * et;
+
+        // setNodeAttribute triggers a render but not a reducer re-run —
+        // the edgeReducer reads edgeAnimProgress.current, so force a refresh
+        // each tick so edge color/size track the animation.
+        sigma.refresh();
 
         if (nt < 1 || et < 1) {
           requestAnimationFrame(animateTick);

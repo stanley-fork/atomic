@@ -1,5 +1,3 @@
-export { WikiViewer } from './WikiViewer';
-export { WikiListViewer } from './WikiListViewer';
 export { WikiArticlesList } from './WikiArticlesList';
 export { WikiArticleCard } from './WikiArticleCard';
 export { NewWikiModal } from './NewWikiModal';

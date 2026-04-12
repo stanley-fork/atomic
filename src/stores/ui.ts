@@ -1,22 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { CanvasLevel } from '../lib/api';
-import { getCanvasLevel } from '../lib/api';
 import { navigateTo, navigateBack } from '../router/navigate-ref';
 import { viewPath, atomReaderPath, wikiReaderPath, atomGraphPath } from '../router/routes';
 
-export type DrawerMode = 'editor' | 'viewer' | 'wiki';
 export type ViewMode = 'dashboard' | 'atoms' | 'canvas' | 'wiki';
 export type AtomsLayout = 'grid' | 'list';
-
-interface DrawerState {
-  isOpen: boolean;
-  mode: DrawerMode;
-  atomId: string | null;      // For editor/viewer modes
-  tagId: string | null;       // For wiki mode
-  tagName: string | null;     // For wiki mode (display purposes)
-  highlightText: string | null;   // For viewer mode (text to highlight and scroll to)
-}
 
 interface LocalGraphState {
   isOpen: boolean;
@@ -29,11 +17,6 @@ export interface LoadingOperation {
   id: string;
   message: string;
   timestamp: number;
-}
-
-interface CanvasNavState {
-  currentLevel: CanvasLevel | null;
-  isLoading: boolean;
 }
 
 interface ReaderState {
@@ -61,7 +44,6 @@ export interface OverlayNav {
 interface UIStore {
   selectedTagId: string | null;
   expandedTagIds: Record<string, boolean>;  // Tags that should be expanded in sidebar
-  drawerState: DrawerState;
   readerState: ReaderState;
   wikiReaderState: WikiReaderState;
   overlayNav: OverlayNav;
@@ -89,8 +71,6 @@ interface UIStore {
   commandPaletteInitialQuery: string;
   // Reader theme
   readerTheme: 'light' | 'dark';
-  // Canvas navigation state
-  canvasNav: CanvasNavState;
   // Actions
   setServerConnected: (connected: boolean) => void;
   setLeftPanelOpen: (open: boolean) => void;
@@ -109,10 +89,6 @@ interface UIStore {
   overlayBack: () => void;
   overlayForward: () => void;
   overlayDismiss: () => void;
-  openDrawer: (mode: DrawerMode, atomId?: string, highlightText?: string) => void;
-  openWikiDrawer: (tagId: string, tagName: string) => void;
-  openWikiListDrawer: () => void;
-  closeDrawer: () => void;
   // Chat sidebar actions
   toggleChatSidebar: () => void;
   setChatSidebarOpen: (open: boolean) => void;
@@ -138,8 +114,6 @@ interface UIStore {
   toggleCommandPalette: () => void;
   setReaderTheme: (theme: 'light' | 'dark') => void;
   toggleReaderTheme: () => void;
-  // Canvas navigation actions
-  navigateCanvas: (parentId: string | null, childrenHint?: string[]) => Promise<void>;
 }
 
 export const useUIStore = create<UIStore>()(
@@ -147,14 +121,6 @@ export const useUIStore = create<UIStore>()(
     (set, get) => ({
       selectedTagId: null,
       expandedTagIds: {} as Record<string, boolean>,
-      drawerState: {
-        isOpen: false,
-        mode: 'viewer',
-        atomId: null,
-        tagId: null,
-        tagName: null,
-        highlightText: null,
-      },
       readerState: {
         atomId: null,
         highlightText: null,
@@ -192,10 +158,6 @@ export const useUIStore = create<UIStore>()(
       commandPaletteOpen: false,
       commandPaletteInitialQuery: '',
       readerTheme: 'dark' as 'light' | 'dark',
-      canvasNav: {
-        currentLevel: null,
-        isLoading: false,
-      },
 
       setLeftPanelOpen: (open: boolean) => set({ leftPanelOpen: open }),
       toggleLeftPanel: () => set((state) => ({ leftPanelOpen: !state.leftPanelOpen })),
@@ -392,51 +354,6 @@ export const useUIStore = create<UIStore>()(
       },
 
 
-      openDrawer: (mode: DrawerMode, atomId?: string, highlightText?: string) =>
-        set({
-          drawerState: {
-            isOpen: true,
-            mode,
-            atomId: atomId || null,
-            tagId: null,
-            tagName: null,
-            highlightText: highlightText || null,
-          },
-        }),
-
-      openWikiDrawer: (tagId: string, tagName: string) =>
-        set({
-          drawerState: {
-            isOpen: true,
-            mode: 'wiki',
-            atomId: null,
-            tagId,
-            tagName,
-            highlightText: null,
-          },
-        }),
-
-      openWikiListDrawer: () =>
-        set({
-          drawerState: {
-            isOpen: true,
-            mode: 'wiki',
-            atomId: null,
-            tagId: null,
-            tagName: null,
-            highlightText: null,
-          },
-        }),
-
-      closeDrawer: () =>
-        set((state) => ({
-          drawerState: {
-            ...state.drawerState,
-            isOpen: false,
-            highlightText: null,
-          },
-        })),
-
       // Chat sidebar actions
       toggleChatSidebar: () => set((state) => ({ chatSidebarOpen: !state.chatSidebarOpen })),
       setChatSidebarOpen: (open: boolean) => set({ chatSidebarOpen: open }),
@@ -560,17 +477,6 @@ export const useUIStore = create<UIStore>()(
 
       setReaderTheme: (theme: 'light' | 'dark') => set({ readerTheme: theme }),
       toggleReaderTheme: () => set((state) => ({ readerTheme: state.readerTheme === 'dark' ? 'light' : 'dark' })),
-
-      navigateCanvas: async (parentId: string | null, childrenHint?: string[]) => {
-        set({ canvasNav: { currentLevel: null, isLoading: true } });
-        try {
-          const level = await getCanvasLevel(parentId, childrenHint);
-          set({ canvasNav: { currentLevel: level, isLoading: false } });
-        } catch (err) {
-          console.error('Failed to load canvas level:', err);
-          set({ canvasNav: { currentLevel: null, isLoading: false } });
-        }
-      },
     }),
     {
       name: 'atomic-ui-storage',

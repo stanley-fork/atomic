@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { LeftPanel } from './LeftPanel';
 import { MainView } from './MainView';
-import { RightDrawer } from './RightDrawer';
 import { LoadingIndicator } from '../ui/LoadingIndicator';
 import { ServerConnectionStatus } from '../ui/ServerConnectionStatus';
 import { RouterBridge } from '../../router/RouterBridge';
@@ -31,7 +30,6 @@ export function Layout() {
   const toggleCommandPalette = useUIStore((state) => state.toggleCommandPalette);
   const closeCommandPalette = useUIStore((state) => state.closeCommandPalette);
   const openCommandPalette = useUIStore((state) => state.openCommandPalette);
-  // openDrawer removed — new atom flow uses openReaderEditing
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -162,7 +160,6 @@ export function Layout() {
       <RouterBridge />
       <LeftPanel />
       <MainView />
-      <RightDrawer />
       <LoadingIndicator />
       <ServerConnectionStatus />
       <CommandPalette

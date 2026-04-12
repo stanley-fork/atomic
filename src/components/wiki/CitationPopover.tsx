@@ -99,8 +99,9 @@ export function CitationPopover({ citation, anchorRect, onClose, onViewAtom }: C
     return null;
   }
 
-  // Render in a portal to avoid transform containment issues
-  // data-modal="true" prevents RightDrawer's useClickOutside from closing the drawer
+  // Render in a portal to avoid transform containment issues.
+  // data-modal="true" marks this as a modal surface so useClickOutside
+  // on other overlays treats clicks inside as outside-of-self.
   return createPortal(
     <div
       ref={popoverRef}
