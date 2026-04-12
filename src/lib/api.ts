@@ -114,48 +114,6 @@ export async function getAtomsWithEmbeddings(): Promise<AtomWithEmbedding[]> {
   return getTransport().invoke('get_atoms_with_embeddings');
 }
 
-// Hierarchical canvas types and commands
-export type CanvasNodeType = 'category' | 'tag' | 'semantic_cluster' | 'atom';
-
-export interface CanvasNode {
-  id: string;
-  node_type: CanvasNodeType;
-  label: string;
-  atom_count: number;
-  children_ids: string[];
-  dominant_tags: string[];
-  centroid: number[] | null;
-}
-
-export interface CanvasEdge {
-  source_id: string;
-  target_id: string;
-  weight: number;
-}
-
-export interface BreadcrumbEntry {
-  id: string;
-  label: string;
-}
-
-export interface CanvasLevel {
-  parent_id: string | null;
-  parent_label: string | null;
-  breadcrumb: BreadcrumbEntry[];
-  nodes: CanvasNode[];
-  edges: CanvasEdge[];
-}
-
-export async function getCanvasLevel(
-  parentId: string | null,
-  childrenHint?: string[]
-): Promise<CanvasLevel> {
-  return getTransport().invoke('get_canvas_level', {
-    parentId: parentId ?? undefined,
-    childrenHint,
-  });
-}
-
 // Global canvas (PCA-projected positions)
 export interface CanvasAtomPosition {
   atom_id: string;

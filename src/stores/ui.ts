@@ -1,7 +1,5 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { CanvasLevel } from '../lib/api';
-import { getCanvasLevel } from '../lib/api';
 import { navigateTo, navigateBack } from '../router/navigate-ref';
 import { viewPath, atomReaderPath, wikiReaderPath, atomGraphPath } from '../router/routes';
 
@@ -19,11 +17,6 @@ export interface LoadingOperation {
   id: string;
   message: string;
   timestamp: number;
-}
-
-interface CanvasNavState {
-  currentLevel: CanvasLevel | null;
-  isLoading: boolean;
 }
 
 interface ReaderState {
@@ -78,8 +71,6 @@ interface UIStore {
   commandPaletteInitialQuery: string;
   // Reader theme
   readerTheme: 'light' | 'dark';
-  // Canvas navigation state
-  canvasNav: CanvasNavState;
   // Actions
   setServerConnected: (connected: boolean) => void;
   setLeftPanelOpen: (open: boolean) => void;
@@ -123,8 +114,6 @@ interface UIStore {
   toggleCommandPalette: () => void;
   setReaderTheme: (theme: 'light' | 'dark') => void;
   toggleReaderTheme: () => void;
-  // Canvas navigation actions
-  navigateCanvas: (parentId: string | null, childrenHint?: string[]) => Promise<void>;
 }
 
 export const useUIStore = create<UIStore>()(
@@ -169,10 +158,6 @@ export const useUIStore = create<UIStore>()(
       commandPaletteOpen: false,
       commandPaletteInitialQuery: '',
       readerTheme: 'dark' as 'light' | 'dark',
-      canvasNav: {
-        currentLevel: null,
-        isLoading: false,
-      },
 
       setLeftPanelOpen: (open: boolean) => set({ leftPanelOpen: open }),
       toggleLeftPanel: () => set((state) => ({ leftPanelOpen: !state.leftPanelOpen })),
@@ -492,17 +477,6 @@ export const useUIStore = create<UIStore>()(
 
       setReaderTheme: (theme: 'light' | 'dark') => set({ readerTheme: theme }),
       toggleReaderTheme: () => set((state) => ({ readerTheme: state.readerTheme === 'dark' ? 'light' : 'dark' })),
-
-      navigateCanvas: async (parentId: string | null, childrenHint?: string[]) => {
-        set({ canvasNav: { currentLevel: null, isLoading: true } });
-        try {
-          const level = await getCanvasLevel(parentId, childrenHint);
-          set({ canvasNav: { currentLevel: level, isLoading: false } });
-        } catch (err) {
-          console.error('Failed to load canvas level:', err);
-          set({ canvasNav: { currentLevel: null, isLoading: false } });
-        }
-      },
     }),
     {
       name: 'atomic-ui-storage',
