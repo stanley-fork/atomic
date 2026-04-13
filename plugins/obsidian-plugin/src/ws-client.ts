@@ -22,6 +22,16 @@ export type ServerEvent =
     }
   | { type: "ChatComplete"; conversation_id: string; message: unknown }
   | { type: "ChatError"; conversation_id: string; error: string }
+  | { type: "EmbeddingComplete"; atom_id: string }
+  | { type: "EmbeddingFailed"; atom_id: string; error: string }
+  | {
+      type: "TaggingComplete";
+      atom_id: string;
+      tags_extracted: number;
+      new_tags_created: number;
+    }
+  | { type: "TaggingFailed"; atom_id: string; error: string }
+  | { type: "TaggingSkipped"; atom_id: string }
   | { type: string; [key: string]: unknown };
 
 export type EventHandler = (event: ServerEvent) => void;

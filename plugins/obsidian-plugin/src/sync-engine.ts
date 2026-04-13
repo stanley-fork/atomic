@@ -11,6 +11,8 @@ export interface SyncProgress {
   updated: number;
   skipped: number;
   errors: number;
+  /** IDs of atoms created or updated this run — each will have embedding/tagging queued. */
+  atomIds: string[];
 }
 
 export type SyncProgressCallback = (progress: SyncProgress) => void;
@@ -130,6 +132,7 @@ export class SyncEngine {
         await this.persistState();
       } catch (e) {
         console.error(`Atomic: Failed to delete atom for ${file.path}:`, e);
+        new Notice(`Atomic: couldn't delete remote atom for ${file.name ?? file.path} — ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   }
@@ -155,6 +158,7 @@ export class SyncEngine {
       await this.persistState();
     } catch (e) {
       console.error(`Atomic: Failed to update source URL for renamed ${file.path}:`, e);
+      new Notice(`Atomic: couldn't update renamed note — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -249,6 +253,7 @@ export class SyncEngine {
       updated: 0,
       skipped: 0,
       errors: 0,
+      atomIds: [],
     };
 
     if (!onProgress) {
@@ -358,6 +363,7 @@ export class SyncEngine {
               contentHash: entry.hash,
               lastSynced: Date.now(),
             });
+            progress.atomIds.push(newId);
             progress.created++;
           } else {
             const existingId = recovered.get(entry.sourceUrl);
@@ -369,6 +375,7 @@ export class SyncEngine {
                 contentHash: entry.hash,
                 lastSynced: Date.now(),
               });
+              progress.atomIds.push(existingId);
               progress.updated++;
             } else {
               progress.errors++;
@@ -403,6 +410,7 @@ export class SyncEngine {
           contentHash: entry.hash,
           lastSynced: Date.now(),
         });
+        progress.atomIds.push(entry.atomId);
         progress.updated++;
       } catch (e) {
         progress.errors++;

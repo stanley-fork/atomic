@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, MarkdownRenderer } from "obsidian";
+import { ItemView, Notice, WorkspaceLeaf, MarkdownRenderer, setIcon } from "obsidian";
 import { AtomicClient, type TagWithCount, type WikiArticleWithCitations, type WikiCitation } from "./atomic-client";
 
 export const WIKI_VIEW_TYPE = "atomic-wiki";
@@ -11,6 +11,7 @@ export class WikiView extends ItemView {
   private article: WikiArticleWithCitations | null = null;
   private loading = false;
   private generatingAtomCount: number | null = null;
+  private loadError: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, client: AtomicClient, getVaultName: () => string) {
     super(leaf);
@@ -38,8 +39,10 @@ export class WikiView extends ItemView {
   private async loadTags(): Promise<void> {
     try {
       this.tags = await this.client.getTags(1);
+      this.loadError = null;
     } catch (e) {
       console.error("Atomic: Failed to load tags:", e);
+      this.loadError = `Couldn't load tags: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -105,9 +108,11 @@ export class WikiView extends ItemView {
     this.loading = true;
     try {
       this.article = await this.client.getWikiArticle(tagId);
+      this.loadError = null;
     } catch (e) {
       console.error("Atomic: Failed to load wiki article:", e);
       this.article = null;
+      this.loadError = `Couldn't load article: ${e instanceof Error ? e.message : String(e)}`;
     }
     this.loading = false;
   }
@@ -119,6 +124,11 @@ export class WikiView extends ItemView {
 
     // Also remove any additional content/action elements
     wrapper.querySelectorAll(".atomic-wiki-content, .atomic-wiki-empty, .atomic-wiki-actions").forEach((el) => el.remove());
+
+    if (this.loadError) {
+      wrapper.createDiv({ cls: "atomic-wiki-empty atomic-canvas-status-error", text: this.loadError });
+      return;
+    }
 
     if (this.loading) {
       const name = this.findTagName(this.selectedTagId ?? "") ?? "";
@@ -154,6 +164,7 @@ export class WikiView extends ItemView {
           this.article = await this.client.generateWikiArticle(this.selectedTagId, tagName);
         } catch (e) {
           console.error("Atomic: Failed to generate wiki:", e);
+          new Notice(`Couldn't generate article: ${e instanceof Error ? e.message : String(e)}`);
           this.article = null;
         } finally {
           this.loading = false;
@@ -258,7 +269,7 @@ export class WikiView extends ItemView {
     const el = wrapper.createDiv({ cls: "atomic-wiki-generating" });
 
     const spinner = el.createDiv({ cls: "atomic-wiki-spinner" });
-    spinner.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`;
+    setIcon(spinner, "loader-2");
 
     const title = tagName
       ? `Synthesizing article about "${tagName}"…`

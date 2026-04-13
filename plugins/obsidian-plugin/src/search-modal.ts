@@ -25,6 +25,7 @@ export class SearchModal extends SuggestModal<SearchResult> {
           resolve(this.results);
         } catch (e) {
           console.error("Atomic search failed:", e);
+          new Notice(`Search failed: ${e instanceof Error ? e.message : String(e)}`);
           resolve([]);
         }
       }, 300);

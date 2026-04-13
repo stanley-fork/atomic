@@ -5,5 +5,7 @@
   "minAppVersion": "1.5.0",
   "description": "Connect your vault to an Atomic knowledge base for semantic search, live sync, and AI-generated wiki articles.",
   "author": "Atomic",
+  "authorUrl": "https://github.com/kenforthewin/atomic",
+  "fundingUrl": "https://github.com/sponsors/kenforthewin",
   "isDesktopOnly": false
 }

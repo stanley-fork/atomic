@@ -1003,15 +1003,15 @@ impl SqliteStorage {
     /// LIMIT-1 nondeterministic pick.
     pub(crate) fn get_canvas_atom_metadata_light_sync(
         &self,
-    ) -> StorageResult<Vec<(String, String, Option<String>, i32)>> {
+    ) -> StorageResult<Vec<(String, String, Option<String>, i32, Option<String>)>> {
         let conn = self.db.read_conn()?;
         let mut stmt = conn.prepare(
-            "SELECT a.id, a.title, MIN(t.name) AS primary_tag, COUNT(at.tag_id) AS tag_count
+            "SELECT a.id, a.title, MIN(t.name) AS primary_tag, COUNT(at.tag_id) AS tag_count, a.source_url
              FROM atoms a
              LEFT JOIN atom_tags at ON at.atom_id = a.id
              LEFT JOIN tags t ON t.id = at.tag_id
              WHERE a.embedding_status = 'complete'
-             GROUP BY a.id, a.title"
+             GROUP BY a.id, a.title, a.source_url"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -1020,6 +1020,7 @@ impl SqliteStorage {
                 row.get::<_, String>(1)?,
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, i32>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1049,6 +1050,7 @@ impl SqliteStorage {
                 primary_tag: row.get(4)?,
                 tag_count: row.get(5)?,
                 tag_ids: vec![],
+                source_url: None,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1185,7 +1187,7 @@ impl AtomStore for SqliteStorage {
         self.get_canvas_atom_metadata_sync()
     }
 
-    async fn get_canvas_atom_metadata_light(&self) -> StorageResult<Vec<(String, String, Option<String>, i32)>> {
+    async fn get_canvas_atom_metadata_light(&self) -> StorageResult<Vec<(String, String, Option<String>, i32, Option<String>)>> {
         self.get_canvas_atom_metadata_light_sync()
     }
 }

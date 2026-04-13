@@ -1199,24 +1199,25 @@ impl AtomStore for PostgresStorage {
                 primary_tag,
                 tag_count: tag_count as i32,
                 tag_ids: vec![],
+                source_url: None,
             }
         }).collect())
     }
 
-    async fn get_canvas_atom_metadata_light(&self) -> StorageResult<Vec<(String, String, Option<String>, i32)>> {
-        let rows: Vec<(String, String, Option<String>, i64)> = sqlx::query_as(
-            "SELECT a.id, a.title, MIN(t.name) AS primary_tag, COUNT(at.tag_id) AS tag_count
+    async fn get_canvas_atom_metadata_light(&self) -> StorageResult<Vec<(String, String, Option<String>, i32, Option<String>)>> {
+        let rows: Vec<(String, String, Option<String>, i64, Option<String>)> = sqlx::query_as(
+            "SELECT a.id, a.title, MIN(t.name) AS primary_tag, COUNT(at.tag_id) AS tag_count, a.source_url
              FROM atoms a
              LEFT JOIN atom_tags at ON at.atom_id = a.id AND at.db_id = $1
              LEFT JOIN tags t ON t.id = at.tag_id AND t.db_id = $1
              WHERE a.db_id = $1 AND a.embedding_status = 'complete'
-             GROUP BY a.id, a.title",
+             GROUP BY a.id, a.title, a.source_url",
         )
         .bind(&self.db_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
 
-        Ok(rows.into_iter().map(|(id, title, tag, count)| (id, title, tag, count as i32)).collect())
+        Ok(rows.into_iter().map(|(id, title, tag, count, src)| (id, title, tag, count as i32, src)).collect())
     }
 }

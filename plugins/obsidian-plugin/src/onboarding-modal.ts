@@ -1,4 +1,4 @@
-import { App, Modal, Setting } from "obsidian";
+import { App, Modal, Setting, setIcon } from "obsidian";
 import type AtomicPlugin from "./main";
 import type { SyncProgress } from "./sync-engine";
 
@@ -9,6 +9,8 @@ export class OnboardingModal extends Modal {
   private currentStep = 0;
   private connectionVerified = false;
   private syncResult: SyncProgress | null = null;
+  private _wsUnsubscribe: (() => void) | null = null;
+  private _modalClosed = false;
 
   constructor(app: App, plugin: AtomicPlugin) {
     super(app);
@@ -21,6 +23,9 @@ export class OnboardingModal extends Modal {
   }
 
   onClose(): void {
+    this._modalClosed = true;
+    this._wsUnsubscribe?.();
+    this._wsUnsubscribe = null;
     this.contentEl.empty();
   }
 
@@ -56,7 +61,7 @@ export class OnboardingModal extends Modal {
 
       if (i < this.currentStep) {
         dot.addClass("completed");
-        dot.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>`;
+        setIcon(dot, "check");
       } else if (i === this.currentStep) {
         dot.addClass("active");
       }
@@ -210,7 +215,7 @@ export class OnboardingModal extends Modal {
       text: `Found ${files.length} markdown files. Indexing sends them to Atomic for embedding and semantic analysis.`,
     });
 
-    // Progress area (hidden initially)
+    // Phase 1: file upload progress (hidden initially)
     const progressArea = container.createDiv({ cls: "atomic-sync-progress hidden" });
     const barOuter = progressArea.createDiv({ cls: "atomic-progress-bar" });
     const barFill = barOuter.createDiv({ cls: "atomic-progress-fill" });
@@ -228,6 +233,27 @@ export class OnboardingModal extends Modal {
     const statErrors = stats.createDiv({ cls: "atomic-sync-stat" });
     statErrors.createSpan({ cls: "atomic-sync-stat-value", text: "0" });
     statErrors.createSpan({ cls: "atomic-sync-stat-label", text: "errors" });
+
+    // Phase 2: AI processing (hidden until upload completes)
+    const aiArea = container.createDiv({ cls: "atomic-ai-progress hidden" });
+    aiArea.createDiv({ cls: "atomic-ai-title", text: "AI Processing" });
+
+    const embedRow = aiArea.createDiv({ cls: "atomic-ai-row" });
+    embedRow.createSpan({ cls: "atomic-ai-row-label", text: "Embedding" });
+    const embedBarOuter = embedRow.createDiv({ cls: "atomic-progress-bar atomic-ai-bar" });
+    const embedBarFill = embedBarOuter.createDiv({ cls: "atomic-progress-fill" });
+    const embedCount = embedRow.createSpan({ cls: "atomic-ai-row-count", text: "0 / 0" });
+
+    const tagRow = aiArea.createDiv({ cls: "atomic-ai-row" });
+    tagRow.createSpan({ cls: "atomic-ai-row-label", text: "Auto-tagging" });
+    const tagBarOuter = tagRow.createDiv({ cls: "atomic-progress-bar atomic-ai-bar" });
+    const tagBarFill = tagBarOuter.createDiv({ cls: "atomic-progress-fill" });
+    const tagCount = tagRow.createSpan({ cls: "atomic-ai-row-count", text: "0 / 0" });
+
+    aiArea.createDiv({
+      cls: "atomic-ai-hint",
+      text: "Features become available as notes are processed.",
+    });
 
     // Buttons
     const footer = container.createDiv({ cls: "atomic-onboarding-footer" });
@@ -252,7 +278,7 @@ export class OnboardingModal extends Modal {
         } else if (p.phase === "syncing") {
           progressLabel.textContent = `${p.processed} of ${p.totalFiles} files`;
         } else {
-          progressLabel.textContent = "Complete!";
+          progressLabel.textContent = "Upload complete";
         }
 
         statCreated.querySelector(".atomic-sync-stat-value")!.textContent = String(p.created);
@@ -266,11 +292,105 @@ export class OnboardingModal extends Modal {
         console.error("Atomic: Sync failed during onboarding:", e);
       }
 
-      // Brief pause to let the user see "Complete!" before advancing
-      setTimeout(() => {
+      const atomIds = this.syncResult?.atomIds ?? [];
+
+      if (atomIds.length === 0) {
+        // Nothing to process — advance after a brief pause
+        setTimeout(() => {
+          if (!this._modalClosed) { this.currentStep = 3; this.render(); }
+        }, 1000);
+        return;
+      }
+
+      // --- Phase 2: track embedding + tagging via WS + reconciliation ---
+
+      barFill.style.width = "100%";
+      aiArea.removeClass("hidden");
+
+      const total = atomIds.length;
+      const pendingEmbed = new Set(atomIds);
+      const pendingTag = new Set(atomIds);
+      let doneEmbed = 0;
+      let doneTag = 0;
+
+      embedCount.textContent = `0 / ${total}`;
+      tagCount.textContent = `0 / ${total}`;
+
+      let advanced = false;
+      const advance = () => {
+        if (advanced || this._modalClosed) return;
+        advanced = true;
+        this._wsUnsubscribe?.();
+        this._wsUnsubscribe = null;
         this.currentStep = 3;
         this.render();
-      }, 1000);
+      };
+
+      const updateBars = () => {
+        const embedPct = (doneEmbed / total) * 100;
+        const tagPct = (doneTag / total) * 100;
+        embedBarFill.style.width = `${embedPct}%`;
+        tagBarFill.style.width = `${tagPct}%`;
+        embedCount.textContent = `${doneEmbed} / ${total}`;
+        tagCount.textContent = `${doneTag} / ${total}`;
+        if (pendingEmbed.size === 0 && pendingTag.size === 0) {
+          setTimeout(advance, 800);
+        }
+      };
+
+      // Subscribe to WS pipeline events, filtered to atoms from this sync
+      this.plugin.ws.open();
+      this._wsUnsubscribe = this.plugin.ws.on((evt) => {
+        if (evt.type === "EmbeddingComplete" || evt.type === "EmbeddingFailed") {
+          const id = (evt as { atom_id: string }).atom_id;
+          if (pendingEmbed.delete(id)) { doneEmbed++; updateBars(); }
+        } else if (
+          evt.type === "TaggingComplete" ||
+          evt.type === "TaggingFailed" ||
+          evt.type === "TaggingSkipped"
+        ) {
+          const id = (evt as { atom_id: string }).atom_id;
+          if (pendingTag.delete(id)) { doneTag++; updateBars(); }
+        }
+      });
+
+      // Swap footer: remove "Start Indexing", add "Continue in background"
+      startBtn.remove();
+      const continueBtn = footer.createEl("button", {
+        text: "Continue in background",
+        cls: "mod-cta",
+      });
+      continueBtn.addEventListener("click", advance);
+
+      // Reconcile: fetch current status for all atoms to catch anything that
+      // completed in the window between bulk-create and WS subscription
+      try {
+        const CONCURRENCY = 8;
+        for (let i = 0; i < atomIds.length; i += CONCURRENCY) {
+          if (advanced || this._modalClosed) break;
+          const batch = atomIds.slice(i, i + CONCURRENCY);
+          await Promise.all(
+            batch.map(async (id) => {
+              try {
+                const atom = await this.plugin.client.getAtom(id);
+                const embDone =
+                  atom.embedding_status === "complete" || atom.embedding_status === "failed";
+                const tagDone =
+                  atom.tagging_status === "complete" ||
+                  atom.tagging_status === "failed" ||
+                  atom.tagging_status === "skipped";
+                if (embDone && pendingEmbed.delete(id)) doneEmbed++;
+                if (tagDone && pendingTag.delete(id)) doneTag++;
+              } catch {
+                // leave as pending — WS will fire when it completes
+              }
+            })
+          );
+          updateBars();
+        }
+      } catch (e) {
+        console.error("Atomic: Reconciliation failed during onboarding:", e);
+      }
     });
   }
 
@@ -300,21 +420,21 @@ export class OnboardingModal extends Modal {
     const cards = container.createDiv({ cls: "atomic-feature-cards" });
 
     this.renderFeatureCard(cards, {
-      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="m21 21-4.35-4.35"/></svg>`,
+      icon: "search",
       title: "Semantic Search",
       desc: "Search by meaning across your entire vault.",
       shortcut: "Cmd+P \u2192 Atomic: Semantic Search",
     });
 
     this.renderFeatureCard(cards, {
-      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/></svg>`,
+      icon: "arrow-left-right",
       title: "Similar Notes",
       desc: "See related notes in the sidebar as you work.",
       shortcut: "Cmd+P \u2192 Atomic: Open Similar Notes",
     });
 
     this.renderFeatureCard(cards, {
-      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"/></svg>`,
+      icon: "book-open",
       title: "Wiki Articles",
       desc: "AI-generated summaries of topics in your notes.",
       shortcut: "Cmd+P \u2192 Atomic: Open Wiki",
@@ -337,7 +457,7 @@ export class OnboardingModal extends Modal {
   ): void {
     const card = container.createDiv({ cls: "atomic-feature-card" });
     const iconEl = card.createDiv({ cls: "atomic-feature-icon" });
-    iconEl.innerHTML = opts.icon;
+    setIcon(iconEl, opts.icon);
     const text = card.createDiv({ cls: "atomic-feature-text" });
     text.createDiv({ cls: "atomic-feature-title", text: opts.title });
     text.createDiv({ cls: "atomic-feature-desc", text: opts.desc });

@@ -238,7 +238,7 @@ dispatch! {
         => sqlite: get_all_atom_tag_ids_sync, pg_trait: AtomStore, pg_method: get_all_atom_tag_ids;
     fn get_canvas_atom_metadata_sync(&self) -> Result<Vec<CanvasAtomPosition>, AtomicCoreError>
         => sqlite: get_canvas_atom_metadata_sync, pg_trait: AtomStore, pg_method: get_canvas_atom_metadata;
-    fn get_canvas_atom_metadata_light_sync(&self) -> Result<Vec<(String, String, Option<String>, i32)>, AtomicCoreError>
+    fn get_canvas_atom_metadata_light_sync(&self) -> Result<Vec<(String, String, Option<String>, i32, Option<String>)>, AtomicCoreError>
         => sqlite: get_canvas_atom_metadata_light_sync, pg_trait: AtomStore, pg_method: get_canvas_atom_metadata_light;
 
     // ---- TagStore ----

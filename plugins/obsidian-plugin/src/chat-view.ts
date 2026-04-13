@@ -104,6 +104,7 @@ export class ChatView extends ItemView {
       this.conversations = await this.client.listConversations();
     } catch (e) {
       console.error("[Atomic] failed to load conversations:", e);
+      new Notice(`Couldn't load conversations: ${e instanceof Error ? e.message : String(e)}`);
       this.conversations = [];
     }
   }
@@ -113,6 +114,7 @@ export class ChatView extends ItemView {
       this.allTags = await this.client.getTags(0);
     } catch (e) {
       console.error("[Atomic] failed to load tags:", e);
+      new Notice(`Couldn't load tags: ${e instanceof Error ? e.message : String(e)}`);
       this.allTags = [];
     }
   }

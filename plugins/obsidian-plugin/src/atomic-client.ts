@@ -142,6 +142,40 @@ export interface ConversationWithMessages extends Conversation {
   messages: ChatMessageWithContext[];
 }
 
+// Canvas
+
+export interface CanvasAtom {
+  atom_id: string;
+  x: number;
+  y: number;
+  title: string;
+  primary_tag: string | null;
+  tag_count: number;
+  tag_ids: string[];
+  source_url: string | null;
+}
+
+export interface CanvasEdge {
+  source: string;
+  target: string;
+  weight: number;
+}
+
+export interface CanvasCluster {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  atom_count: number;
+  atom_ids: string[];
+}
+
+export interface GlobalCanvasData {
+  atoms: CanvasAtom[];
+  edges: CanvasEdge[];
+  clusters: CanvasCluster[];
+}
+
 export interface CreateAtomRequest {
   content: string;
   source_url?: string | null;
@@ -375,6 +409,16 @@ export class AtomicClient {
   async getAtom(id: string): Promise<AtomWithTags> {
     return this.request({
       url: `${this.baseUrl}/api/atoms/${id}`,
+      method: "GET",
+    });
+  }
+
+  async getCanvas(sourcePrefix?: string): Promise<GlobalCanvasData> {
+    const params = sourcePrefix
+      ? `?source_prefix=${encodeURIComponent(sourcePrefix)}`
+      : "";
+    return this.request({
+      url: `${this.baseUrl}/api/canvas/global${params}`,
       method: "GET",
     });
   }

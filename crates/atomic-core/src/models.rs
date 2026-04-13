@@ -341,6 +341,8 @@ pub struct CanvasAtomPosition {
     pub primary_tag: Option<String>,
     pub tag_count: i32,
     pub tag_ids: Vec<String>,
+    /// Source URL of the atom (e.g. `obsidian://VaultName/path.md`), or null for manually-created atoms.
+    pub source_url: Option<String>,
 }
 
 /// Edge between two atoms for the global canvas

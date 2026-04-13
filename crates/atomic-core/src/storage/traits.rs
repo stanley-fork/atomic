@@ -141,8 +141,8 @@ pub trait AtomStore: Send + Sync {
     /// Get atom metadata for canvas display (title, primary tag, tag count) by position.
     async fn get_canvas_atom_metadata(&self) -> StorageResult<Vec<CanvasAtomPosition>>;
 
-    /// Lightweight canvas metadata: (atom_id, title, primary_tag_name, tag_count).
-    async fn get_canvas_atom_metadata_light(&self) -> StorageResult<Vec<(String, String, Option<String>, i32)>>;
+    /// Lightweight canvas metadata: (atom_id, title, primary_tag_name, tag_count, source_url).
+    async fn get_canvas_atom_metadata_light(&self) -> StorageResult<Vec<(String, String, Option<String>, i32, Option<String>)>>;
 }
 
 // ==================== Tag Storage ====================

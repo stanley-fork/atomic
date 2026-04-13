@@ -1823,7 +1823,7 @@ impl AtomicCore {
         let mut atom_tag_map = storage.get_all_atom_tag_ids_sync()?;
 
         let atoms: Vec<CanvasAtomPosition> = atom_metadata.into_iter()
-            .filter_map(|(atom_id, title, primary_tag, tag_count)| {
+            .filter_map(|(atom_id, title, primary_tag, tag_count, source_url)| {
                 let (x, y) = position_map.get(&atom_id)?;
                 let tag_ids = atom_tag_map.remove(&atom_id).unwrap_or_default();
                 Some(CanvasAtomPosition {
@@ -1834,6 +1834,7 @@ impl AtomicCore {
                     primary_tag,
                     tag_count,
                     tag_ids,
+                    source_url,
                 })
             })
             .collect();

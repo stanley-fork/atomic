@@ -9,6 +9,7 @@ import { WikiView, WIKI_VIEW_TYPE } from "./wiki-view";
 import { ChatView, CHAT_VIEW_TYPE } from "./chat-view";
 import { AtomicWebSocket } from "./ws-client";
 import { OnboardingModal } from "./onboarding-modal";
+import { CanvasView, CANVAS_VIEW_TYPE } from "./canvas-view";
 
 interface PluginData {
   settings: AtomicSettings;
@@ -81,6 +82,12 @@ export default class AtomicPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-canvas",
+      name: "Open Knowledge Graph Canvas",
+      callback: () => this.activateCanvasView(),
+    });
+
+    this.addCommand({
       id: "setup-wizard",
       name: "Setup Wizard",
       callback: () => new OnboardingModal(this.app, this).open(),
@@ -104,6 +111,8 @@ export default class AtomicPlugin extends Plugin {
       this.ws,
       () => this.settings.vaultName || this.app.vault.getName(),
     ));
+
+    this.registerView(CANVAS_VIEW_TYPE, (leaf) => new CanvasView(leaf, this));
 
     // Auto-sync if enabled (skip if not yet configured)
     if (this.settings.authToken && this.settings.autoSync) {
@@ -145,6 +154,18 @@ export default class AtomicPlugin extends Plugin {
       syncState: this.syncEngine.getSyncStateData(),
     };
     await this.saveData(data);
+  }
+
+  private async activateCanvasView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(CANVAS_VIEW_TYPE);
+    if (existing.length > 0) {
+      workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const leaf = workspace.getLeaf("tab");
+    await leaf.setViewState({ type: CANVAS_VIEW_TYPE, active: true });
+    workspace.revealLeaf(leaf);
   }
 
   private async activateView(viewType: string): Promise<void> {
