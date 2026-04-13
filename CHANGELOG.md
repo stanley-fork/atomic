@@ -2,6 +2,15 @@
 
 All notable changes to Atomic are documented here.
 
+## v1.21.6 — 2026-04-13
+
+- Add knowledge-graph canvas to the Obsidian plugin with curved edges, cluster-colored nodes, cluster labels, and five switchable color themes (Ember, Steel Violet, Aurora, Midnight, Mono)
+- Add click-to-open on canvas nodes in the Obsidian plugin — clicking a node navigates to the corresponding Obsidian note
+- Add real-time AI-processing progress (embedding and auto-tagging) to the Obsidian plugin onboarding flow so users can see indexing status after initial sync
+- Surface previously-silent errors as user-visible notices in the Obsidian plugin (search failures, chat/wiki load errors, sync rename/delete failures)
+- Add `source_prefix` filter to the server canvas endpoint, allowing clients to scope the knowledge graph to a specific vault or source
+- Prepare the Obsidian plugin for community-directory distribution (MIT license, versions.json, user-facing README, Obsidian API-compliant icon rendering)
+
 ## v1.21.5 — 2026-04-13
 
 - Add chat view to the Obsidian plugin with streaming messages, conversation history, and tag-scoped conversations
