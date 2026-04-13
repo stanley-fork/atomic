@@ -147,13 +147,17 @@ describe("SyncEngine.syncFile", () => {
 
 describe("SyncEngine debounce (file events)", () => {
   it("coalesces multiple modify events within debounce window", async () => {
-    vi.useFakeTimers();
+    // Real timers: the debounced path runs syncFile which does real crypto work
+    // (WebCrypto digest), and fake timers don't drain those promise chains
+    // reliably across runners. A short real debounce keeps the test fast and
+    // deterministic.
+    const debounceMs = 30;
     const app = new App();
     const client = makeClientMock();
     const engine = new SyncEngine(
       app,
       client as any,
-      makeSettings({ syncDebounceMs: 1000 }),
+      makeSettings({ syncDebounceMs: debounceMs }),
       undefined,
       async () => {}
     );
@@ -161,7 +165,6 @@ describe("SyncEngine debounce (file events)", () => {
     app.vault.read = vi.fn(async () => "hello");
 
     engine.startWatching();
-    // Manually invoke the handler that would fire from vault.on('modify', ...)
     const handler = (app.vault.on as any).mock.calls.find((c: any) => c[0] === "modify")?.[1];
     expect(handler).toBeTypeOf("function");
 
@@ -169,12 +172,11 @@ describe("SyncEngine debounce (file events)", () => {
     handler(file);
     handler(file);
 
-    await vi.advanceTimersByTimeAsync(1100);
-    // Allow microtasks for async syncFile
-    await vi.runAllTimersAsync();
+    // Wait comfortably longer than the debounce, then let the async syncFile
+    // chain settle.
+    await new Promise((r) => setTimeout(r, debounceMs * 5));
 
     expect(client.createAtom).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
   });
 });
 
