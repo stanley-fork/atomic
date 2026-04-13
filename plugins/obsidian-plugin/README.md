@@ -1,5 +1,7 @@
 # Atomic for Obsidian
 
+![Atomic for Obsidian](assets/screenshot.png)
+
 Turn your vault into a semantically-connected, AI-augmented knowledge graph. Atomic syncs your notes to an [Atomic](https://github.com/kenforthewin/atomic) server and gives you semantic search, similar-note discovery, AI-generated wiki articles, an agentic chat over your notes, and a spatial knowledge-graph canvas — all from inside Obsidian.
 
 ## What you get
