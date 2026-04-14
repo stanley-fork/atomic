@@ -353,8 +353,13 @@ function hexToBytes(hex: string): Uint8Array {
 
 function defaultDeps(): AppleNotesDeps {
   return {
-    readAppleNotes: (folderPath: string) =>
-      getTransport().invoke<AppleNotesData>('read_apple_notes', { folderPath }),
+    // `read_apple_notes` lives in the Tauri main process, not atomic-server,
+    // so it must be invoked over Tauri IPC directly rather than through the
+    // HTTP transport (which would 404).
+    readAppleNotes: async (folderPath: string) => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<AppleNotesData>('read_apple_notes', { folderPath });
+    },
     bulkCreate: (atoms: BulkCreateAtomInput[]) =>
       getTransport().invoke<BulkCreateResult>('bulk_create_atoms', { atoms }),
     resolveTags: resolveTagIds,
