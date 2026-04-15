@@ -106,7 +106,14 @@ pub async fn register(
 
     let redirect_uris_json = serde_json::to_string(&req.redirect_uris).unwrap_or_default();
 
-    let client_id = match state.manager.registry().create_oauth_client(
+    let core = match state.manager.active_core() {
+        Ok(c) => c,
+        Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "server_error",
+            "error_description": e.to_string()
+        })),
+    };
+    let client_id = match core.create_oauth_client(
         &req.client_name,
         &secret_hash,
         &redirect_uris_json,
@@ -163,7 +170,11 @@ pub async fn authorize_page(
     }
 
     // Look up client
-    let client_name: String = match state.manager.registry().get_oauth_client_name(&q.client_id) {
+    let core = match state.manager.active_core() {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::InternalServerError().body("Database error"),
+    };
+    let client_name: String = match core.get_oauth_client_name(&q.client_id) {
         Ok(Some(name)) => name,
         Ok(None) => return redirect_with_error(&q.redirect_uri, "invalid_request", q.state.as_deref()),
         Err(_) => return HttpResponse::InternalServerError().body("Database error"),
@@ -219,7 +230,7 @@ pub async fn authorize_approve(
     }
 
     // Verify client_id exists and redirect_uri matches
-    let redirect_uris_json: String = match state.manager.registry().get_oauth_client_redirect_uris(&f.client_id) {
+    let redirect_uris_json: String = match core.get_oauth_client_redirect_uris(&f.client_id) {
         Ok(Some(uris)) => uris,
         Ok(None) => return redirect_with_error(&f.redirect_uri, "invalid_request", f.state.as_deref()),
         Err(_) => return HttpResponse::InternalServerError().body("Database error"),
@@ -239,7 +250,7 @@ pub async fn authorize_approve(
     let now = chrono::Utc::now();
     let expires_at = now + chrono::Duration::minutes(5);
 
-    if let Err(e) = state.manager.registry().store_oauth_code(
+    if let Err(e) = core.store_oauth_code(
         &code_hash,
         &f.client_id,
         &f.code_challenge,
@@ -323,8 +334,16 @@ pub async fn token(
         })),
     };
 
+    let core = match state.manager.active_core() {
+        Ok(c) => c,
+        Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "server_error",
+            "error_description": e.to_string()
+        })),
+    };
+
     // Verify client_id + client_secret
-    let stored_hash: String = match state.manager.registry().get_oauth_client_secret_hash(client_id) {
+    let stored_hash: String = match core.get_oauth_client_secret_hash(client_id) {
         Ok(Some(h)) => h,
         Ok(None) => return HttpResponse::Unauthorized().json(serde_json::json!({
             "error": "invalid_client"
@@ -344,7 +363,7 @@ pub async fn token(
     // Look up authorization code
     let code_hash = hex::encode(Sha256::digest(code.as_bytes()));
 
-    let code_info = match state.manager.registry().lookup_oauth_code(&code_hash) {
+    let code_info = match core.lookup_oauth_code(&code_hash) {
         Ok(Some(info)) => info,
         Ok(None) => return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "invalid_grant",
@@ -393,20 +412,13 @@ pub async fn token(
     }
 
     // Look up client name for the token label
-    let client_name: String = state.manager.registry()
+    let client_name: String = core
         .get_oauth_client_name(client_id)
         .ok()
         .flatten()
         .unwrap_or_else(|| "OAuth Client".to_string());
 
     // Create a new Atomic API token
-    let core = match state.manager.active_core() {
-        Ok(c) => c,
-        Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": "server_error",
-            "error_description": e.to_string()
-        })),
-    };
     let (token_info, raw_token) = match core.create_api_token(&format!("OAuth: {}", client_name)) {
         Ok(t) => t,
         Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({
@@ -416,7 +428,7 @@ pub async fn token(
     };
 
     // Mark code as used and store token_id for auditing
-    let _ = state.manager.registry().mark_oauth_code_used(&code_hash, Some(&token_info.id));
+    let _ = core.mark_oauth_code_used(&code_hash, Some(&token_info.id));
 
     HttpResponse::Ok().json(serde_json::json!({
         "access_token": raw_token,
@@ -586,6 +598,7 @@ mod tests {
             manager,
             event_tx,
             public_url: Some("https://atomic.example.com".to_string()),
+            log_buffer: crate::log_buffer::LogBuffer::new(16),
         });
         std::mem::forget(temp);
         state
@@ -601,6 +614,7 @@ mod tests {
             manager,
             event_tx,
             public_url: None,
+            log_buffer: crate::log_buffer::LogBuffer::new(16),
         });
         std::mem::forget(temp);
         state
@@ -768,7 +782,10 @@ mod tests {
         let client_secret = "test-secret-value";
         let secret_hash = hex::encode(Sha256::digest(client_secret.as_bytes()));
         let redirect_uris = serde_json::to_string(&vec!["http://localhost:3000/callback"]).unwrap();
-        let client_id = state.manager.registry()
+        let client_id = state
+            .manager
+            .active_core()
+            .unwrap()
             .create_oauth_client("Test Client", &secret_hash, &redirect_uris)
             .unwrap();
         (client_id, client_secret.to_string())
@@ -861,7 +878,7 @@ mod tests {
     async fn test_authorize_approve_success_redirects_with_code() {
         let state = test_state_with_oauth();
         let (client_id, _) = register_test_client(&state);
-        let (_, api_token) = state.manager.registry().create_api_token("test").unwrap();
+        let (_, api_token) = state.manager.active_core().unwrap().create_api_token("test").unwrap();
 
         let code_verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         let code_challenge =
@@ -945,7 +962,7 @@ mod tests {
     async fn test_full_oauth_flow() {
         let state = test_state_with_oauth();
         let (client_id, client_secret) = register_test_client(&state);
-        let (_, api_token) = state.manager.registry().create_api_token("test").unwrap();
+        let (_, api_token) = state.manager.active_core().unwrap().create_api_token("test").unwrap();
 
         // Step 1: Generate PKCE pair
         let code_verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -1000,7 +1017,7 @@ mod tests {
         assert!(access_token.starts_with("at_"));
 
         // Step 4: Verify the issued token works
-        let verified = state.manager.registry().verify_api_token(access_token).unwrap();
+        let verified = state.manager.active_core().unwrap().verify_api_token(access_token).unwrap();
         assert!(verified.is_some());
         let info = verified.unwrap();
         assert!(info.name.contains("OAuth: Test Client"));
@@ -1010,7 +1027,7 @@ mod tests {
     async fn test_code_cannot_be_reused() {
         let state = test_state_with_oauth();
         let (client_id, client_secret) = register_test_client(&state);
-        let (_, api_token) = state.manager.registry().create_api_token("test").unwrap();
+        let (_, api_token) = state.manager.active_core().unwrap().create_api_token("test").unwrap();
 
         let code_verifier = "test-verifier-string-for-pkce-flow";
         let code_challenge =
@@ -1074,7 +1091,7 @@ mod tests {
     async fn test_wrong_pkce_verifier_rejected() {
         let state = test_state_with_oauth();
         let (client_id, client_secret) = register_test_client(&state);
-        let (_, api_token) = state.manager.registry().create_api_token("test").unwrap();
+        let (_, api_token) = state.manager.active_core().unwrap().create_api_token("test").unwrap();
 
         let code_verifier = "correct-verifier";
         let code_challenge =

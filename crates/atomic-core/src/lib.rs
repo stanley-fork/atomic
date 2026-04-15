@@ -575,6 +575,143 @@ impl AtomicCore {
         self.storage.ensure_default_token_sync()
     }
 
+    // ==================== OAuth Operations ====================
+    //
+    // OAuth tables are server-global. SQLite stores them on registry.db; Postgres
+    // stores them on the connected database (migration 006). Each method picks the
+    // right backend in the same shape as the token methods above.
+
+    /// Register a new OAuth client. Returns the generated `client_id`.
+    pub fn create_oauth_client(
+        &self,
+        client_name: &str,
+        client_secret_hash: &str,
+        redirect_uris_json: &str,
+    ) -> Result<String, AtomicCoreError> {
+        if let Some(ref reg) = self.registry {
+            return reg.create_oauth_client(client_name, client_secret_hash, redirect_uris_json);
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(pg) = self.storage.as_postgres() {
+            return pg.create_oauth_client_sync(client_name, client_secret_hash, redirect_uris_json);
+        }
+        Err(oauth_unavailable())
+    }
+
+    /// Look up an OAuth client's display name by its `client_id`.
+    pub fn get_oauth_client_name(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<String>, AtomicCoreError> {
+        if let Some(ref reg) = self.registry {
+            return reg.get_oauth_client_name(client_id);
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(pg) = self.storage.as_postgres() {
+            return pg.get_oauth_client_name_sync(client_id);
+        }
+        Err(oauth_unavailable())
+    }
+
+    /// Look up the registered redirect URIs (JSON-encoded) for a client.
+    pub fn get_oauth_client_redirect_uris(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<String>, AtomicCoreError> {
+        if let Some(ref reg) = self.registry {
+            return reg.get_oauth_client_redirect_uris(client_id);
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(pg) = self.storage.as_postgres() {
+            return pg.get_oauth_client_redirect_uris_sync(client_id);
+        }
+        Err(oauth_unavailable())
+    }
+
+    /// Look up the stored client-secret hash for a client.
+    pub fn get_oauth_client_secret_hash(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<String>, AtomicCoreError> {
+        if let Some(ref reg) = self.registry {
+            return reg.get_oauth_client_secret_hash(client_id);
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(pg) = self.storage.as_postgres() {
+            return pg.get_oauth_client_secret_hash_sync(client_id);
+        }
+        Err(oauth_unavailable())
+    }
+
+    /// Persist a freshly issued authorization code.
+    #[allow(clippy::too_many_arguments)]
+    pub fn store_oauth_code(
+        &self,
+        code_hash: &str,
+        client_id: &str,
+        code_challenge: &str,
+        code_challenge_method: &str,
+        redirect_uri: &str,
+        created_at: &str,
+        expires_at: &str,
+    ) -> Result<(), AtomicCoreError> {
+        if let Some(ref reg) = self.registry {
+            return reg.store_oauth_code(
+                code_hash,
+                client_id,
+                code_challenge,
+                code_challenge_method,
+                redirect_uri,
+                created_at,
+                expires_at,
+            );
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(pg) = self.storage.as_postgres() {
+            return pg.store_oauth_code_sync(
+                code_hash,
+                client_id,
+                code_challenge,
+                code_challenge_method,
+                redirect_uri,
+                created_at,
+                expires_at,
+            );
+        }
+        Err(oauth_unavailable())
+    }
+
+    /// Look up an authorization code by its hash.
+    pub fn lookup_oauth_code(
+        &self,
+        code_hash: &str,
+    ) -> Result<Option<registry::OAuthCodeInfo>, AtomicCoreError> {
+        if let Some(ref reg) = self.registry {
+            return reg.lookup_oauth_code(code_hash);
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(pg) = self.storage.as_postgres() {
+            return pg.lookup_oauth_code_sync(code_hash);
+        }
+        Err(oauth_unavailable())
+    }
+
+    /// Mark an authorization code as redeemed and record the issued token id.
+    pub fn mark_oauth_code_used(
+        &self,
+        code_hash: &str,
+        token_id: Option<&str>,
+    ) -> Result<(), AtomicCoreError> {
+        if let Some(ref reg) = self.registry {
+            return reg.mark_oauth_code_used(code_hash, token_id);
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(pg) = self.storage.as_postgres() {
+            return pg.mark_oauth_code_used_sync(code_hash, token_id);
+        }
+        Err(oauth_unavailable())
+    }
+
     // ==================== Atom Operations ====================
 
     /// Count total atoms in this database.
@@ -2759,6 +2896,12 @@ impl AtomicCore {
     pub fn recompute_all_tag_embeddings(&self) -> Result<i32, AtomicCoreError> {
         self.storage.recompute_all_tag_embeddings_sync()
     }
+}
+
+fn oauth_unavailable() -> AtomicCoreError {
+    AtomicCoreError::Configuration(
+        "OAuth is unavailable: no SQLite registry is attached and the storage backend does not support OAuth".to_string(),
+    )
 }
 
 /// Helper to get or create a tag, using a cache to avoid duplicate lookups.

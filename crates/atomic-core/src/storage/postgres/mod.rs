@@ -24,6 +24,8 @@ mod feeds;
 mod clusters;
 #[cfg(feature = "postgres")]
 mod settings;
+#[cfg(feature = "postgres")]
+mod oauth;
 
 #[cfg(feature = "postgres")]
 use crate::error::AtomicCoreError;
@@ -105,6 +107,8 @@ impl PostgresStorage {
             (3, include_str!("migrations/003_add_error_columns.sql")),
             (4, include_str!("migrations/004_wiki_proposals.sql")),
             (5, include_str!("migrations/005_autotag_target.sql")),
+            (6, include_str!("migrations/006_oauth.sql")),
+            (7, include_str!("migrations/007_briefings.sql")),
         ];
 
         // Advisory lock key — arbitrary fixed i64 to serialize migrations

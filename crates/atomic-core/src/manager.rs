@@ -11,9 +11,15 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-/// Manages multiple knowledge-base databases with a shared registry.
+/// Manages multiple knowledge-base databases.
+///
+/// SQLite mode owns a `Registry` (`registry.db`) for cross-database state:
+/// settings, API tokens, OAuth, and the `databases` index. Postgres mode keeps
+/// all of that inside the Postgres database itself (see migration 006_oauth.sql),
+/// so `registry` is `None` and nothing is written to the local filesystem.
 pub struct DatabaseManager {
-    registry: Arc<Registry>,
+    /// SQLite registry, if running in SQLite mode. `None` for Postgres deployments.
+    registry: Option<Arc<Registry>>,
     cores: RwLock<HashMap<String, AtomicCore>>,
     active_id: RwLock<String>,
     /// Postgres connection URL, if using Postgres backend.
@@ -29,7 +35,7 @@ impl DatabaseManager {
         let default_id = registry.get_default_database_id()?;
 
         Ok(DatabaseManager {
-            registry,
+            registry: Some(registry),
             cores: RwLock::new(HashMap::new()),
             active_id: RwLock::new(default_id),
             #[cfg(feature = "postgres")]
@@ -37,31 +43,23 @@ impl DatabaseManager {
         })
     }
 
-    /// Create a manager that uses Postgres for data storage.
-    /// In Postgres mode, there is no separate registry for database management —
-    /// the `databases` table lives in Postgres. Settings, tokens, and DB metadata
-    /// all go through Postgres storage. The SQLite registry is still created for
-    /// OAuth routes but database CRUD uses the Postgres `databases` table.
+    /// Create a manager that uses Postgres for storage with no SQLite dependency.
+    ///
+    /// `data_dir` is unused for storage but kept in the signature so callers
+    /// (CLI, server bootstrap) can pass through the same flag for both backends.
+    /// Settings, tokens, OAuth, and the `databases` index all live in Postgres.
     #[cfg(feature = "postgres")]
     pub fn new_postgres(
-        data_dir: impl AsRef<Path>,
+        _data_dir: impl AsRef<Path>,
         database_url: &str,
     ) -> Result<Self, AtomicCoreError> {
-        // Still need a registry for the DatabaseManager struct (used by OAuth routes).
-        // But AtomicCore gets registry: None so all settings/tokens fall through to Postgres storage.
-        let registry = Arc::new(Registry::open_or_create(&data_dir)?);
+        // Bootstrap with a placeholder db_id; we'll look up the real default from Postgres
+        // once the schema has been migrated.
+        let core = AtomicCore::open_postgres(database_url, "default", None)?;
 
-        // Use a temporary db_id to bootstrap; we'll look up the real default from Postgres.
-        let core = AtomicCore::open_postgres(
-            database_url,
-            "default",
-            None, // No registry — everything goes through Postgres
-        )?;
-
-        // Ensure the default database entry exists in Postgres
+        // Seed the default database row if the `databases` table is empty.
         let databases = core.storage.list_databases_sync()?;
         if databases.is_empty() {
-            // No databases at all — seed the default entry
             let now = chrono::Utc::now().to_rfc3339();
             // Use raw SQL to set is_default = 1 (create_database_sync sets 0)
             if let Some(pg) = core.storage.as_postgres() {
@@ -82,7 +80,7 @@ impl DatabaseManager {
 
         let default_id = core.storage.get_default_database_id_sync()?;
 
-        // If the core was bootstrapped with a different db_id, recreate with the real one
+        // If the bootstrap db_id doesn't match the resolved default, swap to a core scoped to the right db_id.
         let core = if default_id != "default" {
             AtomicCore::open_postgres(database_url, &default_id, None)?
         } else {
@@ -93,10 +91,9 @@ impl DatabaseManager {
         cores_map.insert(default_id.clone(), core);
 
         Ok(DatabaseManager {
-            registry,
+            registry: None,
             cores: RwLock::new(cores_map),
             active_id: RwLock::new(default_id),
-            #[cfg(feature = "postgres")]
             database_url: Some(database_url.to_string()),
         })
     }
@@ -105,6 +102,14 @@ impl DatabaseManager {
     #[cfg(feature = "postgres")]
     fn is_postgres(&self) -> bool {
         self.database_url.is_some()
+    }
+
+    /// SQLite-only paths assume a registry is present. Centralizing the unwrap
+    /// keeps the panic message uniform if the invariant is ever violated.
+    fn sqlite_registry(&self) -> &Arc<Registry> {
+        self.registry
+            .as_ref()
+            .expect("SQLite-only code path invoked without a registry (Postgres mode bug)")
     }
 
     /// Helper: get a storage backend to call database management methods.
@@ -136,11 +141,12 @@ impl DatabaseManager {
         }
 
         // SQLite path: check registry
-        let databases = self.registry.list_databases()?;
+        let registry = self.sqlite_registry();
+        let databases = registry.list_databases()?;
         if databases.iter().any(|d| d.id == id_or_name) {
             return Ok(id_or_name.to_string());
         }
-        if let Some(db) = self.registry.find_database_by_name(id_or_name)? {
+        if let Some(db) = registry.find_database_by_name(id_or_name)? {
             return Ok(db.id);
         }
         // Return the original value — let downstream handle not-found
@@ -191,20 +197,22 @@ impl DatabaseManager {
                     }
                     let mut cores = self.cores.write().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
                     cores.insert(id.to_string(), core.clone());
-                    self.registry.touch_database(id).ok();
+                    // No registry to touch in Postgres mode; last_opened_at on
+                    // the Postgres `databases` row could be wired up later if needed.
                     return Ok(core);
                 }
             }
         }
 
         // SQLite path: load from disk
-        let db_path = self.registry.database_path(id);
+        let registry = self.sqlite_registry();
+        let db_path = registry.database_path(id);
         let core = AtomicCore::open_for_server_with_registry(
             &db_path,
-            Some(Arc::clone(&self.registry)),
+            Some(Arc::clone(registry)),
         )?;
 
-        self.registry.touch_database(id)?;
+        registry.touch_database(id)?;
 
         let mut cores = self.cores.write().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
         cores.insert(id.to_string(), core.clone());
@@ -233,7 +241,7 @@ impl DatabaseManager {
                 return Err(AtomicCoreError::NotFound(format!("Database '{}'", id)));
             }
         } else {
-            let databases = self.registry.list_databases()?;
+            let databases = self.sqlite_registry().list_databases()?;
             if !databases.iter().any(|d| d.id == id) {
                 return Err(AtomicCoreError::NotFound(format!("Database '{}'", id)));
             }
@@ -241,7 +249,7 @@ impl DatabaseManager {
 
         #[cfg(not(feature = "postgres"))]
         {
-            let databases = self.registry.list_databases()?;
+            let databases = self.sqlite_registry().list_databases()?;
             if !databases.iter().any(|d| d.id == id) {
                 return Err(AtomicCoreError::NotFound(format!("Database '{}'", id)));
             }
@@ -255,9 +263,15 @@ impl DatabaseManager {
         Ok(())
     }
 
-    /// Get a reference to the registry for settings/token/database CRUD.
-    pub fn registry(&self) -> &Arc<Registry> {
-        &self.registry
+    /// Get a reference to the SQLite registry, if one is attached.
+    ///
+    /// Returns `None` when the manager is running against Postgres — in that mode,
+    /// settings, tokens, OAuth, and database metadata all live in Postgres and are
+    /// reached via `active_core()` / `get_core()`. Callers that need cross-database
+    /// state should prefer the methods on `AtomicCore`, which dispatch to the
+    /// right backend automatically.
+    pub fn registry(&self) -> Option<&Arc<Registry>> {
+        self.registry.as_ref()
     }
 
     /// Create a new database and register it.
@@ -285,13 +299,14 @@ impl DatabaseManager {
             return Ok(info);
         }
 
-        let info = self.registry.create_database(name)?;
+        let registry = self.sqlite_registry();
+        let info = registry.create_database(name)?;
 
         // Create the actual SQLite file
-        let db_path = self.registry.database_path(&info.id);
+        let db_path = registry.database_path(&info.id);
         let core = AtomicCore::open_for_server_with_registry(
             &db_path,
-            Some(Arc::clone(&self.registry)),
+            Some(Arc::clone(registry)),
         )?;
 
         let mut cores = self.cores.write().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
@@ -333,7 +348,8 @@ impl DatabaseManager {
         }
 
         // SQLite path: Registry validates it's not the default
-        self.registry.delete_database(id)?;
+        let registry = self.sqlite_registry();
+        registry.delete_database(id)?;
 
         // Remove from cache
         {
@@ -349,7 +365,7 @@ impl DatabaseManager {
             let active = self.active_id.read().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
             if *active == id {
                 drop(active);
-                let default_id = self.registry.get_default_database_id()?;
+                let default_id = registry.get_default_database_id()?;
                 let mut active =
                     self.active_id.write().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
                 *active = default_id;
@@ -357,7 +373,7 @@ impl DatabaseManager {
         }
 
         // Delete the file
-        let db_path = self.registry.database_path(id);
+        let db_path = registry.database_path(id);
         if db_path.exists() {
             std::fs::remove_file(&db_path).ok();
             // Also remove WAL/SHM
@@ -377,7 +393,7 @@ impl DatabaseManager {
             return Ok((databases, active.clone()));
         }
 
-        let databases = self.registry.list_databases()?;
+        let databases = self.sqlite_registry().list_databases()?;
         let active = self.active_id.read().map_err(|e| AtomicCoreError::Lock(e.to_string()))?;
         Ok((databases, active.clone()))
     }
@@ -389,7 +405,7 @@ impl DatabaseManager {
             return self.any_storage()?.rename_database_sync(id, name);
         }
 
-        self.registry.rename_database(id, name)
+        self.sqlite_registry().rename_database(id, name)
     }
 
     /// Set a database as the new default.
@@ -399,7 +415,7 @@ impl DatabaseManager {
             return self.any_storage()?.set_default_database_sync(id);
         }
 
-        self.registry.set_default_database(id)
+        self.sqlite_registry().set_default_database(id)
     }
 
     /// Recreate vector indexes on all known databases *except* `skip_id` with the
@@ -414,7 +430,7 @@ impl DatabaseManager {
         }
 
         // SQLite: each database has its own vec_chunks table.
-        let databases = self.registry.list_databases()?;
+        let databases = self.sqlite_registry().list_databases()?;
         for db_info in &databases {
             if db_info.id == skip_id {
                 continue;

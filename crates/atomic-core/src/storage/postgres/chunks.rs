@@ -989,6 +989,96 @@ impl ChunkStore for PostgresStorage {
     }
 }
 
+// ==================== Pipeline status ====================
+
+impl PostgresStorage {
+    /// Embedding/tagging snapshot for the active database. Mirrors the SQLite
+    /// implementation in `sqlite/chunks.rs:get_pipeline_status_sync` so the
+    /// `/api/pipeline-status` endpoint returns the same shape on either backend.
+    pub(crate) fn get_pipeline_status_sync(&self) -> StorageResult<PipelineStatus> {
+        crate::storage::pg_runtime_block_on(self.get_pipeline_status_impl())
+    }
+
+    async fn get_pipeline_status_impl(&self) -> StorageResult<PipelineStatus> {
+        let count_by_status = |status: &'static str| async move {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM atoms WHERE embedding_status = $1 AND db_id = $2",
+            )
+            .bind(status)
+            .bind(&self.db_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
+            Ok::<i32, AtomicCoreError>(count as i32)
+        };
+
+        let pending = count_by_status("pending").await?;
+        let processing = count_by_status("processing").await?;
+        let complete = count_by_status("complete").await?;
+        let failed_count = count_by_status("failed").await?;
+
+        let failed: Vec<FailedAtom> = sqlx::query_as::<_, (String, String, String, Option<String>, String)>(
+            "SELECT id, title, snippet, embedding_error, updated_at
+             FROM atoms
+             WHERE embedding_status = 'failed' AND db_id = $1
+             ORDER BY updated_at DESC
+             LIMIT 100",
+        )
+        .bind(&self.db_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?
+        .into_iter()
+        .map(|(atom_id, title, snippet, error, updated_at)| FailedAtom {
+            atom_id,
+            title,
+            snippet,
+            error,
+            updated_at,
+        })
+        .collect();
+
+        let tagging_failed_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM atoms WHERE tagging_status = 'failed' AND db_id = $1",
+        )
+        .bind(&self.db_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
+
+        let tagging_failed: Vec<FailedAtom> = sqlx::query_as::<_, (String, String, String, Option<String>, String)>(
+            "SELECT id, title, snippet, tagging_error, updated_at
+             FROM atoms
+             WHERE tagging_status = 'failed' AND db_id = $1
+             ORDER BY updated_at DESC
+             LIMIT 100",
+        )
+        .bind(&self.db_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?
+        .into_iter()
+        .map(|(atom_id, title, snippet, error, updated_at)| FailedAtom {
+            atom_id,
+            title,
+            snippet,
+            error,
+            updated_at,
+        })
+        .collect();
+
+        Ok(PipelineStatus {
+            pending,
+            processing,
+            complete,
+            failed_count,
+            failed,
+            tagging_failed_count: tagging_failed_count as i32,
+            tagging_failed,
+        })
+    }
+}
+
 // ==================== Private Helpers ====================
 
 impl PostgresStorage {

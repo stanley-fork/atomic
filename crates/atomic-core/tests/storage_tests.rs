@@ -43,7 +43,9 @@ async fn postgres_storage() -> Option<atomic_core::storage::PostgresStorage> {
          semantic_edges, atom_clusters, tag_embeddings, \
          wiki_articles, wiki_citations, wiki_links, wiki_article_versions, \
          conversations, conversation_tags, chat_messages, chat_tool_calls, chat_citations, \
-         feeds, feed_tags, feed_items, settings CASCADE"
+         feeds, feed_tags, feed_items, settings, \
+         briefing_citations, briefings, oauth_codes, oauth_clients, api_tokens \
+         CASCADE"
     )
     .execute(storage.pool())
     .await

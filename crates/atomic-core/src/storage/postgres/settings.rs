@@ -421,6 +421,9 @@ impl DatabaseStore for PostgresStorage {
             "atom_clusters",
             "tag_embeddings",
             "atom_positions",
+            // briefings before atoms (briefing_citations FK references atoms)
+            "briefing_citations",
+            "briefings",
             "atom_chunks",
             "atom_tags",
             "atoms",

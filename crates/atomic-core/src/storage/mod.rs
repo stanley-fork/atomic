@@ -73,9 +73,7 @@ impl StorageBackend {
         match self {
             StorageBackend::Sqlite(s) => s.get_pipeline_status_sync(),
             #[cfg(feature = "postgres")]
-            StorageBackend::Postgres(_) => Err(AtomicCoreError::DatabaseOperation(
-                "Pipeline status not yet implemented for Postgres".to_string(),
-            )),
+            StorageBackend::Postgres(s) => s.get_pipeline_status_sync(),
         }
     }
 

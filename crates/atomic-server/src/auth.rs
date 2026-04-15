@@ -121,9 +121,14 @@ mod tests {
         let manager = std::sync::Arc::new(
             atomic_core::DatabaseManager::new(temp.path()).unwrap()
         );
-        let (info, raw_token) = manager.registry().create_api_token("test-token").unwrap();
+        let (info, raw_token) = manager.active_core().unwrap().create_api_token("test-token").unwrap();
         let (event_tx, _) = broadcast::channel(16);
-        let state = web::Data::new(AppState { manager, event_tx, public_url: None });
+        let state = web::Data::new(AppState {
+            manager,
+            event_tx,
+            public_url: None,
+            log_buffer: crate::log_buffer::LogBuffer::new(16),
+        });
         // Leak the tempdir so the DB stays alive during the test
         std::mem::forget(temp);
         let _ = info;
@@ -200,9 +205,10 @@ mod tests {
         let (state, raw_token) = test_app_state();
 
         // Get the token ID and revoke it
-        let tokens = state.manager.registry().list_api_tokens().unwrap();
+        let core = state.manager.active_core().unwrap();
+        let tokens = core.list_api_tokens().unwrap();
         let token_id = &tokens[0].id;
-        state.manager.registry().revoke_api_token(token_id).unwrap();
+        core.revoke_api_token(token_id).unwrap();
 
         let app = actix_test::init_service(
             App::new().service(

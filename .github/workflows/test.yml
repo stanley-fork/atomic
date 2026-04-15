@@ -1,0 +1,70 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # SQLite is the default backend — runs without any service containers.
+  sqlite:
+    name: cargo test (sqlite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sqlite
+
+      - name: cargo test (atomic-core, atomic-server)
+        run: cargo test -p atomic-core -p atomic-server --lib --bins --tests -- --test-threads=1
+
+  # Postgres tests run against a pgvector-enabled Postgres 16 service container.
+  # Storage parity tests gate on ATOMIC_TEST_DATABASE_URL, so they're skipped
+  # silently in the SQLite job above and only execute here.
+  postgres:
+    name: cargo test (postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: atomic
+          POSTGRES_PASSWORD: atomic
+          POSTGRES_DB: atomic_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atomic -d atomic_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      ATOMIC_TEST_DATABASE_URL: postgres://atomic:atomic@localhost:5432/atomic_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: postgres
+
+      - name: Enable pgvector extension
+        run: |
+          PGPASSWORD=atomic psql -h localhost -U atomic -d atomic_test \
+            -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+
+      - name: cargo test (storage parity)
+        # Postgres tests share one DB and TRUNCATE between runs, so they must
+        # run serially. SQLite tests in the same binary stay parallel-safe.
+        run: |
+          cargo test -p atomic-core --test storage_tests --features postgres \
+            -- --test-threads=1

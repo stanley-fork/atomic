@@ -41,9 +41,8 @@ async fn main() -> std::io::Result<()> {
 
     match cli.command {
         // Token management subcommands (no server needed)
-        Some(Command::Token { action }) => {
-            let manager = atomic_core::DatabaseManager::new(&data_dir)
-                .expect("Failed to open database manager");
+        Some(Command::Token { storage, database_url, action }) => {
+            let manager = create_manager(&data_dir, &storage, database_url.as_deref());
             let core = manager.active_core()
                 .expect("Failed to get active database");
             run_token_command(&core, action);

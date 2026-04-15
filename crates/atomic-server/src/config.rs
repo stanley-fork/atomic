@@ -69,6 +69,15 @@ pub enum Command {
 
     /// Manage API tokens
     Token {
+        /// Storage backend: "sqlite" (default) or "postgres". Must match the
+        /// backend the server is running against, since tokens live in storage.
+        #[arg(long, default_value = "sqlite", env = "ATOMIC_STORAGE", global = true)]
+        storage: String,
+
+        /// Postgres connection string (required when --storage=postgres).
+        #[arg(long, env = "ATOMIC_DATABASE_URL", global = true)]
+        database_url: Option<String>,
+
         #[command(subcommand)]
         action: TokenAction,
     },

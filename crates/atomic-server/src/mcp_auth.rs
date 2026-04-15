@@ -153,12 +153,13 @@ mod tests {
         let manager = std::sync::Arc::new(
             atomic_core::DatabaseManager::new(temp.path()).unwrap()
         );
-        let (_, raw_token) = manager.registry().create_api_token("test-token").unwrap();
+        let (_, raw_token) = manager.active_core().unwrap().create_api_token("test-token").unwrap();
         let (event_tx, _) = broadcast::channel::<ServerEvent>(16);
         let state = web::Data::new(AppState {
             manager,
             event_tx,
             public_url: public_url.map(String::from),
+            log_buffer: crate::log_buffer::LogBuffer::new(16),
         });
         std::mem::forget(temp);
         (state, raw_token)
@@ -245,8 +246,9 @@ mod tests {
     async fn test_revoked_token_returns_401() {
         let (state, raw_token) = test_state(Some("https://atomic.example.com"));
 
-        let tokens = state.manager.registry().list_api_tokens().unwrap();
-        state.manager.registry().revoke_api_token(&tokens[0].id).unwrap();
+        let core = state.manager.active_core().unwrap();
+        let tokens = core.list_api_tokens().unwrap();
+        core.revoke_api_token(&tokens[0].id).unwrap();
 
         let app = actix_test::init_service(
             App::new().service(

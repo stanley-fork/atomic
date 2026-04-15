@@ -26,12 +26,13 @@ impl TestCtx {
         let manager = Arc::new(
             atomic_core::DatabaseManager::new(temp.path()).unwrap(),
         );
-        let (_info, raw_token) = manager.registry().create_api_token("test").unwrap();
+        let (_info, raw_token) = manager.active_core().unwrap().create_api_token("test").unwrap();
         let (event_tx, _) = broadcast::channel(16);
         let state = web::Data::new(atomic_server::state::AppState {
             manager,
             event_tx,
             public_url: None,
+            log_buffer: atomic_server::log_buffer::LogBuffer::new(16),
         });
         TestCtx {
             _temp: temp,
