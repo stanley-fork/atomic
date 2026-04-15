@@ -944,10 +944,12 @@ impl AtomicCore {
         let settings = self.get_settings()?;
         let config = providers::ProviderConfig::from_settings(&settings);
         let tag_id = options.scope_tag_ids.first().map(|s| s.as_str());
+        let cutoff = options.since_days.map(search::since_days_cutoff);
+        let cutoff_ref = cutoff.as_deref();
 
         match options.mode {
             search::SearchMode::Keyword => {
-                self.storage.keyword_search_sync(&options.query, options.limit, tag_id)
+                self.storage.keyword_search_sync(&options.query, options.limit, tag_id, cutoff_ref)
             }
             search::SearchMode::Semantic => {
                 // Generate query embedding via provider
@@ -966,6 +968,7 @@ impl AtomicCore {
                     options.limit,
                     options.threshold,
                     tag_id,
+                    cutoff_ref,
                 )
             }
             search::SearchMode::Hybrid => {
@@ -982,6 +985,7 @@ impl AtomicCore {
                     &options.query,
                     options.limit * 2,
                     tag_id,
+                    cutoff_ref,
                 )?;
 
                 let semantic_results = if !embeddings.is_empty() && !embeddings[0].is_empty() {
@@ -990,6 +994,7 @@ impl AtomicCore {
                         options.limit * 2,
                         options.threshold,
                         tag_id,
+                        cutoff_ref,
                     )?
                 } else {
                     vec![]

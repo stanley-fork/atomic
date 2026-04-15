@@ -336,15 +336,15 @@ dispatch! {
         => sqlite: count_pending_edges_sync, pg_trait: ChunkStore, pg_method: count_pending_edges;
 
     // ---- SearchStore ----
-    fn vector_search_sync(&self, query_embedding: &[f32], limit: i32, threshold: f32, tag_id: Option<&str>) -> Result<Vec<SemanticSearchResult>, AtomicCoreError>
+    fn vector_search_sync(&self, query_embedding: &[f32], limit: i32, threshold: f32, tag_id: Option<&str>, created_after: Option<&str>) -> Result<Vec<SemanticSearchResult>, AtomicCoreError>
         => sqlite: vector_search_sync, pg_trait: SearchStore, pg_method: vector_search;
-    fn keyword_search_sync(&self, query: &str, limit: i32, tag_id: Option<&str>) -> Result<Vec<SemanticSearchResult>, AtomicCoreError>
+    fn keyword_search_sync(&self, query: &str, limit: i32, tag_id: Option<&str>, created_after: Option<&str>) -> Result<Vec<SemanticSearchResult>, AtomicCoreError>
         => sqlite: keyword_search_sync, pg_trait: SearchStore, pg_method: keyword_search;
     fn find_similar_sync(&self, atom_id: &str, limit: i32, threshold: f32) -> Result<Vec<SimilarAtomResult>, AtomicCoreError>
         => sqlite: find_similar_sync, pg_trait: SearchStore, pg_method: find_similar;
-    fn keyword_search_chunks_sync(&self, query: &str, limit: i32, scope_tag_ids: &[String]) -> Result<Vec<ChunkSearchResult>, AtomicCoreError>
+    fn keyword_search_chunks_sync(&self, query: &str, limit: i32, scope_tag_ids: &[String], created_after: Option<&str>) -> Result<Vec<ChunkSearchResult>, AtomicCoreError>
         => sqlite: keyword_search_chunks_sync, pg_trait: SearchStore, pg_method: keyword_search_chunks;
-    fn vector_search_chunks_sync(&self, query_embedding: &[f32], limit: i32, threshold: f32, scope_tag_ids: &[String]) -> Result<Vec<ChunkSearchResult>, AtomicCoreError>
+    fn vector_search_chunks_sync(&self, query_embedding: &[f32], limit: i32, threshold: f32, scope_tag_ids: &[String], created_after: Option<&str>) -> Result<Vec<ChunkSearchResult>, AtomicCoreError>
         => sqlite: vector_search_chunks_sync, pg_trait: SearchStore, pg_method: vector_search_chunks;
 
     // ---- ChatStore ----

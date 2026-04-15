@@ -66,7 +66,7 @@ fn get_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition::new(
             "search_atoms",
-            "Search for relevant atoms using hybrid keyword and semantic search. Use this to find information related to a specific topic or question.",
+            "Search for relevant atoms using hybrid keyword and semantic search. Use this to find information related to a specific topic or question. Set since_days when the user is asking about recent notes (e.g., 7 for last week, 30 for last month).",
             json!({
                 "type": "object",
                 "properties": {
@@ -78,6 +78,11 @@ fn get_tools() -> Vec<ToolDefinition> {
                         "type": "integer",
                         "description": "Maximum number of results to return (default: 5)",
                         "default": 5
+                    },
+                    "since_days": {
+                        "type": "integer",
+                        "description": "Optional recency filter: only return atoms created within the last N days. Use when the user's question is time-sensitive (e.g., 7 for last week, 30 for last month).",
+                        "minimum": 1
                     }
                 },
                 "required": ["query"]
@@ -196,6 +201,7 @@ async fn execute_search_atoms(
     storage: &StorageBackend,
     query: &str,
     limit: i32,
+    since_days: Option<i32>,
     scope_tag_ids: &[String],
     external_settings: Option<std::collections::HashMap<String, String>>,
 ) -> Result<Vec<SemanticSearchResult>, String> {
@@ -203,7 +209,8 @@ async fn execute_search_atoms(
     if let Some(sqlite) = storage.as_sqlite() {
         let options = SearchOptions::new(query, SearchMode::Hybrid, limit)
             .with_threshold(0.3)
-            .with_scope(scope_tag_ids.to_vec());
+            .with_scope(scope_tag_ids.to_vec())
+            .with_since_days(since_days);
         return crate::search::search_atoms_with_settings(&sqlite.db, options, external_settings).await;
     }
 
@@ -222,10 +229,13 @@ async fn execute_search_atoms(
     let embeddings = provider.embed_batch(&[query.to_string()], &embed_config)
         .await.map_err(|e| e.to_string())?;
 
-    let keyword = storage.keyword_search_sync(query, limit * 2, tag_id)
+    let cutoff = since_days.map(crate::search::since_days_cutoff);
+    let cutoff_ref = cutoff.as_deref();
+
+    let keyword = storage.keyword_search_sync(query, limit * 2, tag_id, cutoff_ref)
         .map_err(|e| e.to_string())?;
     let semantic = if !embeddings.is_empty() && !embeddings[0].is_empty() {
-        storage.vector_search_sync(&embeddings[0], limit * 2, 0.3, tag_id)
+        storage.vector_search_sync(&embeddings[0], limit * 2, 0.3, tag_id, cutoff_ref)
             .map_err(|e| e.to_string())?
     } else { vec![] };
 
@@ -561,7 +571,11 @@ where
                     "search_atoms" => {
                         let query = tool_args["query"].as_str().unwrap_or("");
                         let limit = tool_args["limit"].as_i64().unwrap_or(5) as i32;
-                        match execute_search_atoms(&storage, query, limit, &ctx.scope_tag_ids, external_settings.clone()).await {
+                        let since_days = tool_args.get("since_days")
+                            .and_then(|v| v.as_f64())
+                            .map(|v| v as i32)
+                            .filter(|d| *d > 0);
+                        match execute_search_atoms(&storage, query, limit, since_days, &ctx.scope_tag_ids, external_settings.clone()).await {
                             Ok(results) => {
                                 let count = results.len() as i32;
                                 for result in results.iter() {

@@ -37,6 +37,8 @@ pub struct SearchOptions {
     pub threshold: f32,
     /// Optional tag IDs to filter results (only return atoms with these tags)
     pub scope_tag_ids: Vec<String>,
+    /// Optional recency filter: only return atoms created within the last N days
+    pub since_days: Option<i32>,
 }
 
 impl SearchOptions {
@@ -47,6 +49,7 @@ impl SearchOptions {
             limit,
             threshold: 0.3,
             scope_tag_ids: vec![],
+            since_days: None,
         }
     }
 
@@ -59,6 +62,11 @@ impl SearchOptions {
         self.scope_tag_ids = tag_ids;
         self
     }
+
+    pub fn with_since_days(mut self, since_days: Option<i32>) -> Self {
+        self.since_days = since_days;
+        self
+    }
 }
 
 impl Default for SearchOptions {
@@ -69,6 +77,7 @@ impl Default for SearchOptions {
             limit: 10,
             threshold: 0.3,
             scope_tag_ids: vec![],
+            since_days: None,
         }
     }
 }
@@ -213,7 +222,8 @@ pub async fn search_atoms_with_settings(
         }
     }
 
-    // Sort by score descending and limit
+    // Sort by score descending and limit. The recency filter is pushed into the
+    // underlying SQL queries, so no post-filtering is needed here.
     let mut deduped: Vec<ChunkResult> = atom_best.into_values().collect();
     deduped.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     deduped.truncate(options.limit as usize);
@@ -239,6 +249,14 @@ pub async fn search_atoms_with_settings(
     }
 
     Ok(results)
+}
+
+/// Compute an ISO 8601 UTC cutoff string for "N days ago".
+/// created_at values are stored as ISO 8601 (with 'Z' or offset), which sort lexicographically.
+pub fn since_days_cutoff(since_days: i32) -> String {
+    let days = since_days.max(0) as i64;
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
+    cutoff.to_rfc3339()
 }
 
 /// Batch fetch atoms by IDs in a single query
@@ -331,32 +349,55 @@ async fn search_keyword_chunks(
 ) -> Result<Vec<ChunkResult>, String> {
     let conn = db.read_conn().map_err(|e| e.to_string())?;
 
-    let mut fts_stmt = conn
-        .prepare(
-            "SELECT id, atom_id, content, chunk_index, bm25(atom_chunks_fts) as score
-             FROM atom_chunks_fts
-             WHERE atom_chunks_fts MATCH ?1
-             ORDER BY bm25(atom_chunks_fts)
-             LIMIT ?2",
-        )
-        .map_err(|e| format!("Failed to prepare FTS query: {}", e))?;
-
     let escaped_query = escape_fts5_query(&options.query);
-    let fetch_limit = options.limit * 5; // Fetch extra for filtering
+    let fetch_limit = options.limit * 5; // Fetch extra for dedup/scope
 
-    let raw_results: Vec<(String, String, String, i32, f64)> = fts_stmt
-        .query_map(rusqlite::params![&escaped_query, fetch_limit], |row| {
-            Ok((
-                row.get(0)?, // chunk_id
-                row.get(1)?, // atom_id
-                row.get(2)?, // content
-                row.get(3)?, // chunk_index
-                row.get(4)?, // BM25 score
-            ))
-        })
-        .map_err(|e| format!("Failed to query FTS: {}", e))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to collect FTS results: {}", e))?;
+    let cutoff = options.since_days.map(since_days_cutoff);
+
+    let row_map = |row: &rusqlite::Row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i32>(3)?,
+            row.get::<_, f64>(4)?,
+        ))
+    };
+
+    let raw_results: Vec<(String, String, String, i32, f64)> = if let Some(ref c) = cutoff {
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.id, f.atom_id, f.content, f.chunk_index, bm25(atom_chunks_fts) AS score
+                 FROM atom_chunks_fts f
+                 INNER JOIN atoms a ON a.id = f.atom_id
+                 WHERE atom_chunks_fts MATCH ?1 AND a.created_at >= ?2
+                 ORDER BY bm25(atom_chunks_fts)
+                 LIMIT ?3",
+            )
+            .map_err(|e| format!("Failed to prepare FTS query: {}", e))?;
+        let rows: Vec<_> = stmt
+            .query_map(rusqlite::params![&escaped_query, c, fetch_limit], row_map)
+            .map_err(|e| format!("Failed to query FTS: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect FTS results: {}", e))?;
+        rows
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, atom_id, content, chunk_index, bm25(atom_chunks_fts) AS score
+                 FROM atom_chunks_fts
+                 WHERE atom_chunks_fts MATCH ?1
+                 ORDER BY bm25(atom_chunks_fts)
+                 LIMIT ?2",
+            )
+            .map_err(|e| format!("Failed to prepare FTS query: {}", e))?;
+        let rows: Vec<_> = stmt
+            .query_map(rusqlite::params![&escaped_query, fetch_limit], row_map)
+            .map_err(|e| format!("Failed to query FTS: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect FTS results: {}", e))?;
+        rows
+    };
 
     // Apply tag scope filter if specified
     let filtered = filter_by_scope(&conn, raw_results, &options.scope_tag_ids)?;
@@ -407,23 +448,57 @@ async fn search_semantic_chunks(
     let conn = db.read_conn().map_err(|e| e.to_string())?;
     let fetch_limit = options.limit * 10;
 
-    let mut vec_stmt = conn
-        .prepare(
-            "SELECT chunk_id, distance
-             FROM vec_chunks
-             WHERE embedding MATCH ?1
-             ORDER BY distance
-             LIMIT ?2",
-        )
-        .map_err(|e| format!("Failed to prepare vec query: {}", e))?;
+    let cutoff = options.since_days.map(since_days_cutoff);
+    let row_map = |row: &rusqlite::Row| Ok((row.get::<_, String>(0)?, row.get::<_, f32>(1)?));
 
-    let similar_chunks: Vec<(String, f32)> = vec_stmt
-        .query_map(rusqlite::params![&query_blob, fetch_limit], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
-        .map_err(|e| format!("Failed to query similar chunks: {}", e))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to collect similar chunks: {}", e))?;
+    // sqlite-vec requires MATCH to be the sole constraint on vec_chunks, so the
+    // cutoff is applied in an outer JOIN over the top-k by-distance set.
+    let similar_chunks: Vec<(String, f32)> = if let Some(ref c) = cutoff {
+        // sqlite-vec requires MATCH to be the sole predicate on vec_chunks, so the
+        // cutoff filter runs over the top-k result set. Inflate the inner LIMIT so
+        // that if most of the nearest chunks predate the cutoff we still have
+        // enough survivors to reach the caller's requested limit.
+        let knn_limit = fetch_limit.saturating_mul(5);
+        let mut stmt = conn
+            .prepare(
+                "SELECT v.chunk_id, v.distance
+                 FROM (
+                     SELECT chunk_id, distance
+                     FROM vec_chunks
+                     WHERE embedding MATCH ?1
+                     ORDER BY distance
+                     LIMIT ?2
+                 ) v
+                 INNER JOIN atom_chunks ac ON ac.id = v.chunk_id
+                 INNER JOIN atoms a ON a.id = ac.atom_id
+                 WHERE a.created_at >= ?3
+                 ORDER BY v.distance
+                 LIMIT ?4",
+            )
+            .map_err(|e| format!("Failed to prepare vec query: {}", e))?;
+        let rows: Vec<_> = stmt
+            .query_map(rusqlite::params![&query_blob, knn_limit, c, fetch_limit], row_map)
+            .map_err(|e| format!("Failed to query similar chunks: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect similar chunks: {}", e))?;
+        rows
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT chunk_id, distance
+                 FROM vec_chunks
+                 WHERE embedding MATCH ?1
+                 ORDER BY distance
+                 LIMIT ?2",
+            )
+            .map_err(|e| format!("Failed to prepare vec query: {}", e))?;
+        let rows: Vec<_> = stmt
+            .query_map(rusqlite::params![&query_blob, fetch_limit], row_map)
+            .map_err(|e| format!("Failed to query similar chunks: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect similar chunks: {}", e))?;
+        rows
+    };
 
     // Filter by threshold first, then batch-load chunk details
     let filtered: Vec<(String, f32)> = similar_chunks

@@ -15,24 +15,42 @@ impl SearchStore for PostgresStorage {
         limit: i32,
         threshold: f32,
         tag_id: Option<&str>,
+        created_after: Option<&str>,
     ) -> StorageResult<Vec<SemanticSearchResult>> {
         let embedding_vec = Vector::from(query_embedding.to_vec());
         let fetch_limit = limit * 10;
 
-        // Query pgvector using cosine distance operator <=>
-        let rows: Vec<(String, String, String, i32, f64)> = sqlx::query_as(
-            "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
-                    (ac.embedding <=> $1::vector) AS distance
-             FROM atom_chunks ac
-             WHERE ac.embedding IS NOT NULL AND ac.db_id = $3
-             ORDER BY ac.embedding <=> $1::vector
-             LIMIT $2",
-        )
-        .bind(&embedding_vec)
-        .bind(fetch_limit)
-        .bind(&self.db_id)
-        .fetch_all(&self.pool)
-        .await
+        let rows: Vec<(String, String, String, i32, f64)> = if let Some(cutoff) = created_after {
+            sqlx::query_as(
+                "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
+                        (ac.embedding <=> $1::vector) AS distance
+                 FROM atom_chunks ac
+                 INNER JOIN atoms a ON a.id = ac.atom_id AND a.db_id = ac.db_id
+                 WHERE ac.embedding IS NOT NULL AND ac.db_id = $3 AND a.created_at >= $4
+                 ORDER BY ac.embedding <=> $1::vector
+                 LIMIT $2",
+            )
+            .bind(&embedding_vec)
+            .bind(fetch_limit)
+            .bind(&self.db_id)
+            .bind(cutoff)
+            .fetch_all(&self.pool)
+            .await
+        } else {
+            sqlx::query_as(
+                "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
+                        (ac.embedding <=> $1::vector) AS distance
+                 FROM atom_chunks ac
+                 WHERE ac.embedding IS NOT NULL AND ac.db_id = $3
+                 ORDER BY ac.embedding <=> $1::vector
+                 LIMIT $2",
+            )
+            .bind(&embedding_vec)
+            .bind(fetch_limit)
+            .bind(&self.db_id)
+            .fetch_all(&self.pool)
+            .await
+        }
         .map_err(|e| AtomicCoreError::Search(format!("Vector search failed: {}", e)))?;
 
         // Filter by threshold: pgvector cosine distance is 0-2, similarity = 1.0 - distance
@@ -111,6 +129,7 @@ impl SearchStore for PostgresStorage {
         query: &str,
         limit: i32,
         tag_id: Option<&str>,
+        created_after: Option<&str>,
     ) -> StorageResult<Vec<SemanticSearchResult>> {
         let query_trimmed = query.trim();
         if query_trimmed.is_empty() {
@@ -119,20 +138,39 @@ impl SearchStore for PostgresStorage {
 
         let fetch_limit = limit * 5;
 
-        // Use Postgres tsvector/plainto_tsquery for full-text search
-        let rows: Vec<(String, String, String, i32, f32)> = sqlx::query_as(
-            "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
-                    ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) AS rank
-             FROM atom_chunks ac
-             WHERE ac.content_tsv @@ plainto_tsquery('english', $1) AND ac.db_id = $3
-             ORDER BY ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) DESC
-             LIMIT $2",
-        )
-        .bind(query_trimmed)
-        .bind(fetch_limit)
-        .bind(&self.db_id)
-        .fetch_all(&self.pool)
-        .await
+        let rows: Vec<(String, String, String, i32, f32)> = if let Some(cutoff) = created_after {
+            sqlx::query_as(
+                "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
+                        ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) AS rank
+                 FROM atom_chunks ac
+                 INNER JOIN atoms a ON a.id = ac.atom_id AND a.db_id = ac.db_id
+                 WHERE ac.content_tsv @@ plainto_tsquery('english', $1)
+                   AND ac.db_id = $3
+                   AND a.created_at >= $4
+                 ORDER BY ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) DESC
+                 LIMIT $2",
+            )
+            .bind(query_trimmed)
+            .bind(fetch_limit)
+            .bind(&self.db_id)
+            .bind(cutoff)
+            .fetch_all(&self.pool)
+            .await
+        } else {
+            sqlx::query_as(
+                "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
+                        ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) AS rank
+                 FROM atom_chunks ac
+                 WHERE ac.content_tsv @@ plainto_tsquery('english', $1) AND ac.db_id = $3
+                 ORDER BY ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) DESC
+                 LIMIT $2",
+            )
+            .bind(query_trimmed)
+            .bind(fetch_limit)
+            .bind(&self.db_id)
+            .fetch_all(&self.pool)
+            .await
+        }
         .map_err(|e| AtomicCoreError::Search(format!("Keyword search failed: {}", e)))?;
 
         // Apply tag scope filter if specified
@@ -204,6 +242,7 @@ impl SearchStore for PostgresStorage {
         query: &str,
         limit: i32,
         scope_tag_ids: &[String],
+        created_after: Option<&str>,
     ) -> StorageResult<Vec<ChunkSearchResult>> {
         let query_trimmed = query.trim();
         if query_trimmed.is_empty() {
@@ -211,19 +250,39 @@ impl SearchStore for PostgresStorage {
         }
 
         let fetch_limit = limit * 3;
-        let rows: Vec<(String, String, String, i32, f32)> = sqlx::query_as(
-            "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
-                    ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) AS rank
-             FROM atom_chunks ac
-             WHERE ac.content_tsv @@ plainto_tsquery('english', $1) AND ac.db_id = $3
-             ORDER BY ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) DESC
-             LIMIT $2",
-        )
-        .bind(query_trimmed)
-        .bind(fetch_limit)
-        .bind(&self.db_id)
-        .fetch_all(&self.pool)
-        .await
+        let rows: Vec<(String, String, String, i32, f32)> = if let Some(cutoff) = created_after {
+            sqlx::query_as(
+                "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
+                        ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) AS rank
+                 FROM atom_chunks ac
+                 INNER JOIN atoms a ON a.id = ac.atom_id AND a.db_id = ac.db_id
+                 WHERE ac.content_tsv @@ plainto_tsquery('english', $1)
+                   AND ac.db_id = $3
+                   AND a.created_at >= $4
+                 ORDER BY ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) DESC
+                 LIMIT $2",
+            )
+            .bind(query_trimmed)
+            .bind(fetch_limit)
+            .bind(&self.db_id)
+            .bind(cutoff)
+            .fetch_all(&self.pool)
+            .await
+        } else {
+            sqlx::query_as(
+                "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
+                        ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) AS rank
+                 FROM atom_chunks ac
+                 WHERE ac.content_tsv @@ plainto_tsquery('english', $1) AND ac.db_id = $3
+                 ORDER BY ts_rank(ac.content_tsv, plainto_tsquery('english', $1)) DESC
+                 LIMIT $2",
+            )
+            .bind(query_trimmed)
+            .bind(fetch_limit)
+            .bind(&self.db_id)
+            .fetch_all(&self.pool)
+            .await
+        }
         .map_err(|e| AtomicCoreError::Search(format!("Keyword chunk search failed: {}", e)))?;
 
         // Apply scope filter
@@ -261,23 +320,44 @@ impl SearchStore for PostgresStorage {
         limit: i32,
         threshold: f32,
         scope_tag_ids: &[String],
+        created_after: Option<&str>,
     ) -> StorageResult<Vec<ChunkSearchResult>> {
         let embedding_vec = Vector::from(query_embedding.to_vec());
         let fetch_limit = limit * 5;
 
-        let rows: Vec<(String, String, String, i32, f64)> = sqlx::query_as(
-            "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
-                    (ac.embedding <=> $1::vector) AS distance
-             FROM atom_chunks ac
-             WHERE ac.embedding IS NOT NULL AND ac.db_id = $3
-             ORDER BY ac.embedding <=> $1::vector
-             LIMIT $2",
-        )
-        .bind(&embedding_vec)
-        .bind(fetch_limit)
-        .bind(&self.db_id)
-        .fetch_all(&self.pool)
-        .await
+        let rows: Vec<(String, String, String, i32, f64)> = if let Some(cutoff) = created_after {
+            sqlx::query_as(
+                "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
+                        (ac.embedding <=> $1::vector) AS distance
+                 FROM atom_chunks ac
+                 INNER JOIN atoms a ON a.id = ac.atom_id AND a.db_id = ac.db_id
+                 WHERE ac.embedding IS NOT NULL
+                   AND ac.db_id = $3
+                   AND a.created_at >= $4
+                 ORDER BY ac.embedding <=> $1::vector
+                 LIMIT $2",
+            )
+            .bind(&embedding_vec)
+            .bind(fetch_limit)
+            .bind(&self.db_id)
+            .bind(cutoff)
+            .fetch_all(&self.pool)
+            .await
+        } else {
+            sqlx::query_as(
+                "SELECT ac.id, ac.atom_id, ac.content, ac.chunk_index,
+                        (ac.embedding <=> $1::vector) AS distance
+                 FROM atom_chunks ac
+                 WHERE ac.embedding IS NOT NULL AND ac.db_id = $3
+                 ORDER BY ac.embedding <=> $1::vector
+                 LIMIT $2",
+            )
+            .bind(&embedding_vec)
+            .bind(fetch_limit)
+            .bind(&self.db_id)
+            .fetch_all(&self.pool)
+            .await
+        }
         .map_err(|e| AtomicCoreError::Search(format!("Vector chunk search failed: {}", e)))?;
 
         let filtered: Vec<(String, String, String, i32, f32)> = rows

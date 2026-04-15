@@ -443,20 +443,26 @@ pub trait ChunkStore: Send + Sync {
 #[async_trait]
 pub trait SearchStore: Send + Sync {
     /// Perform vector similarity search using embeddings.
+    /// `created_after` is an optional ISO 8601 cutoff — only atoms created at or after
+    /// this timestamp are returned.
     async fn vector_search(
         &self,
         query_embedding: &[f32],
         limit: i32,
         threshold: f32,
         tag_id: Option<&str>,
+        created_after: Option<&str>,
     ) -> StorageResult<Vec<SemanticSearchResult>>;
 
     /// Perform keyword search using full-text search.
+    /// `created_after` is an optional ISO 8601 cutoff — only atoms created at or after
+    /// this timestamp are returned.
     async fn keyword_search(
         &self,
         query: &str,
         limit: i32,
         tag_id: Option<&str>,
+        created_after: Option<&str>,
     ) -> StorageResult<Vec<SemanticSearchResult>>;
 
     /// Find atoms similar to a given atom.
@@ -474,6 +480,7 @@ pub trait SearchStore: Send + Sync {
         query: &str,
         limit: i32,
         scope_tag_ids: &[String],
+        created_after: Option<&str>,
     ) -> StorageResult<Vec<ChunkSearchResult>>;
 
     /// Search for chunks using vector similarity.
@@ -484,6 +491,7 @@ pub trait SearchStore: Send + Sync {
         limit: i32,
         threshold: f32,
         scope_tag_ids: &[String],
+        created_after: Option<&str>,
     ) -> StorageResult<Vec<ChunkSearchResult>>;
 }
 

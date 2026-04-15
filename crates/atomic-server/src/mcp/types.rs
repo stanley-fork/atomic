@@ -13,6 +13,10 @@ pub struct SemanticSearchParams {
     #[serde(default)]
     pub limit: Option<i32>,
 
+    /// Optional recency filter: only return atoms created within the last N days.
+    /// Use this when the user asks about recent notes ("this week", "last month", etc.).
+    #[serde(default)]
+    pub since_days: Option<i32>,
 }
 
 /// Input parameters for read_atom tool

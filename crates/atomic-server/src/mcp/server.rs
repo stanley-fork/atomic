@@ -55,7 +55,7 @@ impl AtomicMcpServer {
 impl AtomicMcpServer {
     /// Search for atoms using hybrid keyword + semantic search
     #[tool(
-        description = "Search your memory for relevant knowledge. Use this before answering questions that may relate to previously stored information. Returns matching atoms ranked by relevance."
+        description = "Search your memory for relevant knowledge. Use this before answering questions that may relate to previously stored information. Returns matching atoms ranked by relevance. Set since_days to constrain to recent atoms (e.g., 7 for last week, 30 for last month) when the question is time-sensitive."
     )]
     async fn semantic_search(
         &self,
@@ -69,7 +69,8 @@ impl AtomicMcpServer {
             atomic_core::SearchMode::Hybrid,
             limit,
         )
-        .with_threshold(0.3);
+        .with_threshold(0.3)
+        .with_since_days(params.since_days);
 
         let results = core
             .search(options)

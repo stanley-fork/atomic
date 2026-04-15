@@ -157,7 +157,7 @@ async fn handle_search(
     tracing::debug!(query = %query, limit, "[wiki/agentic] search");
 
     // Perform hybrid search: keyword + vector, merged via RRF
-    let keyword_results = match storage.keyword_search_chunks_sync(&query, limit * 2, scope_tag_ids) {
+    let keyword_results = match storage.keyword_search_chunks_sync(&query, limit * 2, scope_tag_ids, None) {
         Ok(r) => r,
         Err(e) => return format!("Keyword search error: {}", e),
     };
@@ -168,7 +168,7 @@ async fn handle_search(
             let embed_config = EmbeddingConfig::new(provider_config.embedding_model());
             match provider.embed_batch(&[query.clone()], &embed_config).await {
                 Ok(embeddings) if !embeddings.is_empty() && !embeddings[0].is_empty() => {
-                    match storage.vector_search_chunks_sync(&embeddings[0], limit * 2, 0.3, scope_tag_ids) {
+                    match storage.vector_search_chunks_sync(&embeddings[0], limit * 2, 0.3, scope_tag_ids, None) {
                         Ok(r) => r,
                         Err(_) => Vec::new(),
                     }
