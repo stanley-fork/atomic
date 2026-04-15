@@ -12,7 +12,7 @@ interface State {
 
 function ErrorFallback({ error, onReset }: { error: Error | null; onReset: () => void }) {
   return (
-    <div className="flex h-screen items-center justify-center bg-[var(--color-bg-main)]">
+    <div className="flex h-full items-center justify-center bg-[var(--color-bg-main)]">
       <div className="max-w-md w-full mx-4 p-6 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl shadow-lg">
         <div className="flex items-center gap-3 mb-4">
           <AlertTriangle className="w-6 h-6 text-red-400 shrink-0" strokeWidth={2} />

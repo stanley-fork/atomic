@@ -12,7 +12,7 @@ export function LoadingIndicator() {
 
   return (
     <div
-      className="fixed bottom-5 right-5 z-40 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-4 py-3 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200"
+      className="fixed bottom-5 right-5 mb-[env(safe-area-inset-bottom)] mr-[env(safe-area-inset-right)] z-40 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-4 py-3 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200"
       role="status"
       aria-live="polite"
     >

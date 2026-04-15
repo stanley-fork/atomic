@@ -61,6 +61,12 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     allowedHosts: true,
+    watch: {
+      // The Capacitor iOS scaffold copies dist-web into mobile/ios/App/App/public
+      // during `cap sync`. Vite would otherwise crawl those files and get
+      // confused by the stale absolute source paths in their sourcemaps.
+      ignored: ['**/mobile/ios/**', '**/target/**', '**/dist-web/**', '**/dist/**'],
+    },
     proxy: isWebBuild
       ? {
           '/api': {

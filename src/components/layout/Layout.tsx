@@ -140,7 +140,7 @@ export function Layout() {
   // Show loading while checking
   if (isSetupRequired === null) {
     return (
-      <div className={`flex h-screen items-center justify-center bg-[var(--color-bg-main)] ${isTauri() ? 'pt-[28px]' : ''}`}>
+      <div className={`flex h-full items-center justify-center bg-[var(--color-bg-main)] ${isTauri() ? 'pt-[28px]' : ''}`}>
         <span className="text-[var(--color-text-secondary)]">Loading...</span>
       </div>
     );
@@ -149,14 +149,14 @@ export function Layout() {
   // Show onboarding wizard if setup is required
   if (isSetupRequired) {
     return (
-      <div className={`flex h-screen overflow-hidden bg-[var(--color-bg-main)] ${isTauri() ? 'pt-[28px]' : ''}`}>
+      <div className={`flex h-full overflow-hidden bg-[var(--color-bg-main)] ${isTauri() ? 'pt-[28px]' : ''}`}>
         <OnboardingWizard onComplete={handleSetupComplete} />
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--color-bg-main)]">
+    <div className="flex h-full overflow-hidden bg-[var(--color-bg-main)]">
       <RouterBridge />
       <LeftPanel />
       <MainView />

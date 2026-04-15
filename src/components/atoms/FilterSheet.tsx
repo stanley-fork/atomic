@@ -79,7 +79,7 @@ export function FilterSheet({ isOpen, onClose, displayCount }: FilterSheetProps)
 
       {/* Sheet */}
       <div
-        className={`fixed inset-x-0 bottom-0 z-50 bg-[var(--color-bg-panel)] border-t border-[var(--color-border)] rounded-t-2xl shadow-2xl max-h-[85vh] flex flex-col transition-transform duration-300 ease-out ${
+        className={`fixed inset-x-0 bottom-0 z-50 bg-[var(--color-bg-panel)] border-t border-[var(--color-border)] rounded-t-2xl shadow-2xl max-h-[85vh] flex flex-col transition-transform duration-300 ease-out pb-[env(safe-area-inset-bottom)] ${
           isOpen ? 'translate-y-0' : 'translate-y-full'
         }`}
         role="dialog"

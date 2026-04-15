@@ -362,7 +362,7 @@ function DatabasesTab() {
 
       {/* Delete confirmation dialog */}
       {confirmDeleteDb && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 safe-area-padding">
           <div className="bg-[var(--color-bg-panel)] border border-[var(--color-border)] rounded-lg shadow-xl p-6 mx-4 max-w-sm w-full space-y-4">
             <div className="space-y-2">
               <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">Delete database?</h3>
@@ -1148,7 +1148,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     <div
       ref={overlayRef}
       onClick={handleOverlayClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm safe-area-padding"
     >
       <div className="relative bg-[var(--color-bg-panel)] rounded-lg shadow-xl border border-[var(--color-border)] w-full max-w-2xl mx-4 h-[80vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}

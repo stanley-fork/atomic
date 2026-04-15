@@ -5,10 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "VITE_BUILD_TARGET=web vite",
     "build": "tsc && vite build",
     "dev:server": "node scripts/dev-server.js",
     "dev:server:pg": "node scripts/dev-server.js --postgres",
     "build:web": "VITE_BUILD_TARGET=web vite build --outDir dist-web",
+    "build:mobile": "npm run build:web && cap sync ios",
+    "cap:sync": "cap sync ios",
+    "cap:sync:dev": "CAP_DEV_URL=http://localhost:1420 cap sync ios",
+    "cap:open:ios": "cap open ios",
+    "dev:mobile:ios": "node scripts/dev-mobile-ios.js",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -38,6 +44,8 @@
     "stress:wikipedia": "node scripts/stress-test-wikipedia.js"
   },
   "dependencies": {
+    "@capacitor/core": "^8.3.0",
+    "@capacitor/ios": "^8.3.0",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/theme-one-dark": "^6.1.3",
     "@sigma/edge-curve": "^3.1.0",
@@ -70,6 +78,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.101",
+    "@capacitor/cli": "^8.3.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tauri-apps/cli": "^2.0.0",
     "@types/d3-force": "^3.0.10",

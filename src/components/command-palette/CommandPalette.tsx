@@ -53,7 +53,7 @@ export function CommandPalette({ isOpen, onClose, initialQuery = '' }: CommandPa
       ref={overlayRef}
       onClick={handleOverlayClick}
       data-modal="true"
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-black/50 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-black/50 backdrop-blur-sm safe-area-padding"
     >
       <div
         className="w-full max-w-xl mx-4 bg-[var(--color-bg-panel)] rounded-xl shadow-2xl border border-[var(--color-border)] animate-in fade-in zoom-in-95 duration-200 overflow-hidden"

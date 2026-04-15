@@ -722,6 +722,7 @@ export function MainView() {
       className={`
         relative flex-shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-panel)] overflow-hidden
         max-md:fixed max-md:top-0 max-md:right-0 max-md:h-full max-md:w-full max-md:z-40 max-md:shadow-2xl
+        max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)] max-md:pr-[env(safe-area-inset-right)]
         md:w-[var(--chat-w)]
         ${isResizingChat ? '' : 'transition-[width,transform] duration-300 ease-in-out'}
         ${chatSidebarOpen ? 'max-md:translate-x-0' : 'max-md:translate-x-full'}

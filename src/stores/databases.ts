@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { getTransport } from '../lib/transport';
+import { syncSharedConfig } from '../lib/mobile/shared-config';
 import { useAtomsStore } from './atoms';
 import { useTagsStore } from './tags';
 import { useWikiStore } from './wiki';
@@ -56,6 +57,7 @@ export const useDatabasesStore = create<DatabasesStore>()(
         activeId: result.active_id,
         isLoading: false,
       });
+      void syncSharedConfig({ databaseId: result.active_id });
     } catch (e) {
       set({ error: String(e), isLoading: false });
     }
@@ -135,6 +137,7 @@ export const useDatabasesStore = create<DatabasesStore>()(
       const transport = getTransport();
       await transport.invoke('activate_database', { id });
       set({ activeId: id });
+      void syncSharedConfig({ databaseId: id });
 
       // Reset all data stores to force refetch
       useAtomsStore.getState().reset();

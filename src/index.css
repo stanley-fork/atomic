@@ -226,6 +226,29 @@ body {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
+/* Reserve room for iOS safe areas (status bar, home indicator) when running
+   in a native WKWebView with viewport-fit=cover. env() returns 0 in desktop
+   and mobile browsers, so this is a no-op there. Applied on #root with
+   box-sizing: border-box so `h-screen` inside keeps its full-viewport
+   background while children respect the inset. */
+#root {
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  box-sizing: border-box;
+}
+
+/* Utility for elements that escape #root via `position: fixed` (modals,
+   drawers, bottom sheets). Apply on the outermost fixed container — its
+   children are then constrained to the safe area. No-op on desktop. */
+.safe-area-padding {
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
 code, pre, kbd, samp, .cm-editor {
   letter-spacing: normal;
 }

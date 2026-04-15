@@ -46,7 +46,7 @@ export function ServerConnectionStatus() {
       role="status"
       aria-label="Disconnected from server, attempting to reconnect"
       title="Disconnected — attempting to reconnect"
-      className="fixed bottom-3 right-3 z-40 flex items-center gap-1.5 px-2 py-1 rounded-full bg-[var(--color-bg-card)]/90 border border-[var(--color-border)] shadow-sm backdrop-blur-sm animate-in fade-in duration-300"
+      className="fixed bottom-3 right-3 mb-[env(safe-area-inset-bottom)] mr-[env(safe-area-inset-right)] z-40 flex items-center gap-1.5 px-2 py-1 rounded-full bg-[var(--color-bg-card)]/90 border border-[var(--color-border)] shadow-sm backdrop-blur-sm animate-in fade-in duration-300"
     >
       <span className="relative flex h-2 w-2">
         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />

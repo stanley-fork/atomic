@@ -1,6 +1,7 @@
 import type { Transport, HttpTransportConfig } from './types';
 import { HttpTransport } from './http';
 import { useUIStore } from '../../stores/ui';
+import { syncSharedConfig, clearSharedConfig } from '../mobile/shared-config';
 export type { Transport, HttpTransportConfig };
 
 let activeTransport: Transport | null = null;
@@ -38,6 +39,7 @@ export async function initTransport(): Promise<void> {
       activeTransport = new HttpTransport(config);
       wireConnectionCallback(activeTransport);
       await activeTransport.connect();
+      void syncSharedConfig({ serverURL: config.baseUrl, apiToken: config.authToken });
     } else {
       // Create a disconnected HttpTransport — user must configure via settings
       activeTransport = new HttpTransport({ baseUrl: '', authToken: '' });
@@ -52,6 +54,7 @@ export async function switchTransport(config: HttpTransportConfig): Promise<void
   wireConnectionCallback(activeTransport);
   await activeTransport.connect();
   localStorage.setItem('atomic-server-config', JSON.stringify(config));
+  void syncSharedConfig({ serverURL: config.baseUrl, apiToken: config.authToken });
 }
 
 /// Switch back to the local sidecar server (desktop only)
@@ -64,6 +67,7 @@ export async function switchToLocal(): Promise<void> {
   wireConnectionCallback(activeTransport);
   await activeTransport.connect();
   localStorage.removeItem('atomic-server-config');
+  void clearSharedConfig();
 }
 
 /// True when running inside the Tauri desktop app (sidecar available)
