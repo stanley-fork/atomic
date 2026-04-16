@@ -48,22 +48,6 @@ pub fn ok_or_error<T: serde::Serialize>(
     }
 }
 
-/// Async version: runs a blocking closure on the actix blocking thread pool
-/// so it doesn't tie up the async worker thread.
-pub async fn blocking_ok<T, F>(f: F) -> HttpResponse
-where
-    T: serde::Serialize + Send + 'static,
-    F: FnOnce() -> Result<T, atomic_core::AtomicCoreError> + Send + 'static,
-{
-    match actix_web::web::block(f).await {
-        Ok(Ok(data)) => HttpResponse::Ok().json(data),
-        Ok(Err(e)) => error_response(e),
-        Err(e) => HttpResponse::InternalServerError().json(ApiErrorResponse {
-            error: format!("Thread pool error: {}", e),
-        }),
-    }
-}
-
 /// Get the HTTP status code for an AtomicCoreError
 pub fn status_code_for(e: &atomic_core::AtomicCoreError) -> actix_web::http::StatusCode {
     use actix_web::http::StatusCode;

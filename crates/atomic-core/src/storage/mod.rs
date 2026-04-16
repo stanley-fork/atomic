@@ -61,9 +61,59 @@ impl StorageBackend {
     /// Get pipeline status (embedding counts + failed atoms).
     pub(crate) async fn get_pipeline_status(&self) -> Result<crate::models::PipelineStatus, AtomicCoreError> {
         match self {
-            StorageBackend::Sqlite(s) => s.get_pipeline_status_sync(),
+            StorageBackend::Sqlite(s) => {
+                let s = s.clone();
+                tokio::task::spawn_blocking(move || s.get_pipeline_status_sync())
+                    .await
+                    .map_err(join_err)?
+            }
             #[cfg(feature = "postgres")]
             StorageBackend::Postgres(s) => s.get_pipeline_status_impl().await,
+        }
+    }
+
+    // ---- Hand-written dispatches for methods with consumed-value args ----
+    // These can't go through the `dispatch!` macro because the macro's
+    // `ReborrowArg` pattern produces a reference, but these sync methods
+    // take owned values.
+
+    pub(crate) async fn get_canvas_level_sync(
+        &self,
+        parent_id: Option<&str>,
+        children_hint: Option<Vec<String>>,
+    ) -> Result<CanvasLevel, AtomicCoreError> {
+        match self {
+            StorageBackend::Sqlite(s) => {
+                let s = s.clone();
+                let parent_id = parent_id.map(|s| s.to_string());
+                tokio::task::spawn_blocking(move || {
+                    s.get_canvas_level_sync(parent_id.as_deref(), children_hint)
+                })
+                .await
+                .map_err(join_err)?
+            }
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(s) => {
+                <PostgresStorage as ClusterStore>::get_canvas_level(s, parent_id, children_hint).await
+            }
+        }
+    }
+
+    pub(crate) async fn enrich_clusters_with_tags_sync(
+        &self,
+        clusters: Vec<AtomCluster>,
+    ) -> Result<Vec<AtomCluster>, AtomicCoreError> {
+        match self {
+            StorageBackend::Sqlite(s) => {
+                let s = s.clone();
+                tokio::task::spawn_blocking(move || s.enrich_clusters_with_tags_sync(clusters))
+                    .await
+                    .map_err(join_err)?
+            }
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(s) => {
+                <PostgresStorage as ClusterStore>::enrich_clusters_with_tags(s, clusters).await
+            }
         }
     }
 
@@ -80,13 +130,135 @@ impl StorageBackend {
 // ==================== Async dispatch methods ====================
 //
 // Each method dispatches to either the SqliteStorage sync helper
-// or the PostgresStorage async trait method (called directly).
-// SQLite: direct sync call (fast, avoids clone/spawn overhead).
+// or the PostgresStorage async trait method.
+// SQLite: sync call wrapped in `spawn_blocking` so it doesn't tie up the
+// async executor thread under concurrent server load.
 // Postgres: native async — the sqlx future runs on the caller's runtime.
 
+use crate::compaction::{CompactionResult, TagMerge};
+use crate::models::*;
+use crate::{CreateAtomRequest, ListAtomsParams, UpdateAtomRequest};
+use std::collections::{HashMap, HashSet};
+
+/// Maps a `spawn_blocking` JoinError into `AtomicCoreError`.
+fn join_err(e: tokio::task::JoinError) -> AtomicCoreError {
+    AtomicCoreError::DatabaseOperation(format!("spawn_blocking join: {e}"))
+}
+
+/// Convert a (possibly borrowed) argument into an owned form that can be
+/// moved into a `spawn_blocking` closure. Paired with [`ReborrowArg`] which
+/// converts the owned value back to the form the sync method expects.
+pub(crate) trait SpawnArg {
+    type Owned: Send + 'static;
+    fn into_spawn_arg(self) -> Self::Owned;
+}
+
+/// Given an owned value produced by [`SpawnArg::into_spawn_arg`], produce the
+/// borrowed (or copied) form the underlying sync method signature expects.
+pub(crate) trait ReborrowArg<'a> {
+    type Out;
+    fn reborrow_arg(&'a self) -> Self::Out;
+}
+
+// ---- SpawnArg impls ----
+
+impl SpawnArg for &str {
+    type Owned = String;
+    fn into_spawn_arg(self) -> String { self.to_string() }
+}
+
+impl<T: Clone + Send + Sync + 'static> SpawnArg for &[T] {
+    type Owned = Vec<T>;
+    fn into_spawn_arg(self) -> Vec<T> { self.to_vec() }
+}
+
+// Blanket for `&Struct` where Struct is sized (structs, not str/[T]).
+impl<T: Clone + Send + Sync + 'static> SpawnArg for &T {
+    type Owned = T;
+    fn into_spawn_arg(self) -> T { self.clone() }
+}
+
+impl SpawnArg for Option<&str> {
+    type Owned = Option<String>;
+    fn into_spawn_arg(self) -> Option<String> { self.map(|s| s.to_string()) }
+}
+
+impl<T: Clone + Send + Sync + 'static> SpawnArg for Option<&[T]> {
+    type Owned = Option<Vec<T>>;
+    fn into_spawn_arg(self) -> Option<Vec<T>> { self.map(|s| s.to_vec()) }
+}
+
+// Copy scalars pass through.
+macro_rules! impl_spawn_arg_copy {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl SpawnArg for $ty {
+                type Owned = $ty;
+                fn into_spawn_arg(self) -> $ty { self }
+            }
+        )*
+    };
+}
+impl_spawn_arg_copy!(i32, usize, f32, bool, Option<i32>, Option<bool>);
+
+// ---- ReborrowArg impls ----
+
+impl<'a> ReborrowArg<'a> for String {
+    type Out = &'a str;
+    fn reborrow_arg(&'a self) -> &'a str { self.as_str() }
+}
+
+impl<'a, T: 'a> ReborrowArg<'a> for Vec<T> {
+    type Out = &'a [T];
+    fn reborrow_arg(&'a self) -> &'a [T] { self.as_slice() }
+}
+
+impl<'a> ReborrowArg<'a> for Option<String> {
+    type Out = Option<&'a str>;
+    fn reborrow_arg(&'a self) -> Option<&'a str> { self.as_deref() }
+}
+
+impl<'a, T: 'a> ReborrowArg<'a> for Option<Vec<T>> {
+    type Out = Option<&'a [T]>;
+    fn reborrow_arg(&'a self) -> Option<&'a [T]> { self.as_deref() }
+}
+
+macro_rules! impl_reborrow_copy {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl<'a> ReborrowArg<'a> for $ty {
+                type Out = $ty;
+                fn reborrow_arg(&'a self) -> $ty { *self }
+            }
+        )*
+    };
+}
+impl_reborrow_copy!(i32, usize, f32, bool, Option<i32>, Option<bool>);
+
+// Struct types: sync method takes `&Struct`, owned is `Struct`, reborrow is `&Struct`.
+macro_rules! impl_reborrow_struct {
+    ($($ty:path),* $(,)?) => {
+        $(
+            impl<'a> ReborrowArg<'a> for $ty {
+                type Out = &'a $ty;
+                fn reborrow_arg(&'a self) -> &'a $ty { self }
+            }
+        )*
+    };
+}
+impl_reborrow_struct!(
+    CreateAtomRequest,
+    UpdateAtomRequest,
+    ListAtomsParams,
+    WikiArticle,
+    WikiProposal,
+    crate::briefing::Briefing,
+);
+
 /// Macro to generate async dispatch methods. For each method:
-/// - SQLite: calls `s.$sqlite_method($($arg),*)` (sync, sub-ms)
-/// - Postgres: calls `<TraitName>::$trait_method(s, $($arg),*).await`
+/// - SQLite: owns args via `SpawnArg`, runs the sync call on tokio's blocking pool,
+///   reborrows args inside via `ReborrowArg`.
+/// - Postgres: calls the async trait method directly (native async).
 macro_rules! dispatch {
     (
         $(
@@ -98,7 +270,15 @@ macro_rules! dispatch {
             $(
                 pub(crate) async fn $name(&self $(, $arg: $argty)*) -> $ret {
                     match self {
-                        StorageBackend::Sqlite(s) => s.$sqlite_method($($arg),*),
+                        StorageBackend::Sqlite(s) => {
+                            let s = s.clone();
+                            $(let $arg = SpawnArg::into_spawn_arg($arg);)*
+                            tokio::task::spawn_blocking(move || {
+                                s.$sqlite_method($(ReborrowArg::reborrow_arg(&$arg)),*)
+                            })
+                            .await
+                            .map_err(join_err)?
+                        }
                         #[cfg(feature = "postgres")]
                         StorageBackend::Postgres(s) => {
                             <PostgresStorage as $trait_name>::$pg_method(s $(, $arg)*).await
@@ -109,11 +289,6 @@ macro_rules! dispatch {
         }
     };
 }
-
-use crate::compaction::{CompactionResult, TagMerge};
-use crate::models::*;
-use crate::{CreateAtomRequest, ListAtomsParams, UpdateAtomRequest};
-use std::collections::{HashMap, HashSet};
 
 dispatch! {
     // ---- AtomStore ----
@@ -377,10 +552,6 @@ dispatch! {
         => sqlite: save_clusters_sync, pg_trait: ClusterStore, pg_method: save_clusters;
     fn get_clusters_sync(&self) -> Result<Vec<AtomCluster>, AtomicCoreError>
         => sqlite: get_clusters_sync, pg_trait: ClusterStore, pg_method: get_clusters;
-    fn get_canvas_level_sync(&self, parent_id: Option<&str>, children_hint: Option<Vec<String>>) -> Result<CanvasLevel, AtomicCoreError>
-        => sqlite: get_canvas_level_sync, pg_trait: ClusterStore, pg_method: get_canvas_level;
-    fn enrich_clusters_with_tags_sync(&self, clusters: Vec<AtomCluster>) -> Result<Vec<AtomCluster>, AtomicCoreError>
-        => sqlite: enrich_clusters_with_tags_sync, pg_trait: ClusterStore, pg_method: enrich_clusters_with_tags;
 
     // ---- DatabaseStore ----
     fn list_databases_sync(&self) -> Result<Vec<crate::registry::DatabaseInfo>, AtomicCoreError>

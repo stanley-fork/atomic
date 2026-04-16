@@ -14,7 +14,7 @@ pub struct MergeResult {
     pub merges: Vec<TagMerge>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TagMerge {
     pub winner_name: String,
     pub loser_name: String,
