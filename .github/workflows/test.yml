@@ -1,0 +1,119 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-test:
+    name: Rust tests (SQLite)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
+
+      # atomic-core, atomic-server, mcp-bridge, and atomic-cloud do not need
+      # webkit/gtk — those are only required by src-tauri, which we skip here
+      # via explicit `-p` flags. This keeps the Linux test job lightweight.
+      - name: Run unit + integration tests
+        run: |
+          cargo test \
+            -p atomic-core \
+            -p atomic-server \
+            -p mcp-bridge \
+            -p atomic-cloud \
+            --locked
+
+  rust-test-postgres:
+    name: Rust tests (Postgres)
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: atomic
+          POSTGRES_PASSWORD: atomic
+          POSTGRES_DB: atomic_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atomic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ATOMIC_TEST_DATABASE_URL: postgres://atomic:atomic@localhost:5432/atomic_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-test-pg-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-pg-
+            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
+
+      # Postgres-backed storage tests share one DB and must run serially.
+      # See crates/atomic-core/tests/storage_tests.rs for the rationale.
+      - name: Run storage tests against Postgres
+        run: |
+          cargo test \
+            -p atomic-core \
+            --features postgres \
+            --test storage_tests \
+            --locked \
+            -- --test-threads=1
+
+  frontend-test:
+    name: Frontend tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Vitest
+        run: npm test
