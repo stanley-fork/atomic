@@ -40,6 +40,26 @@ jobs:
             image: atomic
             platform: linux/arm64
             runner: ubuntu-24.04-arm
+          - dockerfile: Dockerfile
+            target: server-postgres
+            image: atomic-server-postgres
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - dockerfile: Dockerfile
+            target: server-postgres
+            image: atomic-server-postgres
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - dockerfile: Dockerfile
+            target: all-in-one-postgres
+            image: atomic-postgres
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - dockerfile: Dockerfile
+            target: all-in-one-postgres
+            image: atomic-postgres
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -102,6 +122,8 @@ jobs:
           - atomic-server
           - atomic-web
           - atomic
+          - atomic-server-postgres
+          - atomic-postgres
 
     runs-on: ubuntu-latest
     permissions:

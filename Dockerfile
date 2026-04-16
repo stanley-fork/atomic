@@ -130,3 +130,66 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8081/health || exit 1
 
 CMD ["sh", "-c", "chown -R atomic:atomic /data && exec supervisord -c /etc/supervisor/conf.d/supervisord.conf"]
+
+# =============================================================================
+# Stage 6: Server runtime (Postgres)
+# =============================================================================
+# Same atomic-server binary as the SQLite `server` stage above (the postgres
+# feature is enabled by default in atomic-server's Cargo.toml). The stage only
+# differs in runtime configuration:
+#   - ATOMIC_STORAGE=postgres puts the server in Postgres mode.
+#   - The entrypoint drops --db-path; the operator supplies ATOMIC_DATABASE_URL
+#     (e.g. via Fly secrets, docker run -e, or compose).
+#   - No /data volume — Postgres holds all state.
+FROM debian:bookworm-slim AS server-postgres
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --create-home --shell /bin/false atomic
+
+COPY --from=rust-builder /usr/local/bin/atomic-server /usr/local/bin/atomic-server
+
+ENV ATOMIC_STORAGE=postgres
+
+USER atomic
+EXPOSE 8080
+
+ENTRYPOINT ["atomic-server"]
+CMD ["serve", "--bind", "0.0.0.0", "--port", "8080"]
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# =============================================================================
+# Stage 7: All-in-one (Postgres) — server + nginx + frontend, no /data
+# =============================================================================
+# Mirrors `all-in-one` but with the Postgres storage env set. Reuses the same
+# supervisord/nginx configs; the --data-dir flag inside supervisord.conf is
+# inert in Postgres mode (data_dir is unused once ATOMIC_STORAGE=postgres).
+FROM debian:bookworm-slim AS all-in-one-postgres
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl nginx supervisor && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --create-home --shell /bin/false atomic && \
+    mkdir -p /data && chown atomic:atomic /data
+
+COPY --from=rust-builder /usr/local/bin/atomic-server /usr/local/bin/atomic-server
+COPY --from=frontend-builder /app/dist-web/ /usr/share/nginx/html/
+
+RUN rm -f /etc/nginx/sites-enabled/default
+COPY docker/nginx-fly.conf /etc/nginx/conf.d/atomic.conf
+COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+ENV ATOMIC_STORAGE=postgres
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+CMD ["sh", "-c", "exec supervisord -c /etc/supervisor/conf.d/supervisord.conf"]
