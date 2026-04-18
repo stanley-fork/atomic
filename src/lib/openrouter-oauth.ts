@@ -37,7 +37,7 @@ export async function generatePKCE(): Promise<{
 }
 
 export function getCallbackUrl(): string {
-  return `${window.location.origin}/oauth/openrouter-callback.html`;
+  return `${window.location.origin}/openrouter-callback.html`;
 }
 
 export function openOAuthPopup(codeChallenge: string, codeChallengeMethod: 'S256' | 'plain'): Window | null {
